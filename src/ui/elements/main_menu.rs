@@ -174,15 +174,27 @@ fn select_workspace(editor: &mut EditorState, commands: &mut Vec<UiCommand>, wor
         return;
     }
     editor.active_workspace = workspace;
+    if workspace != Workspace::DrillAndBlast && editor.drill_pattern_open {
+        editor.close_drill_pattern();
+    }
+    // A tie-in is Drill & Blast's own run; it does not wait on the other side
+    // of a trip through production.
+    editor.end_tie_chain();
+    editor.initiation_dialog = None;
     // A selection is made in one discipline's terms - production selects a
     // drill hole dataset whole where Drill & Blast selects one hole of it - so
     // it is left behind with the workspace that made it rather than carried
     // into the next one.
     commands.push(UiCommand::ClearSelection);
-    if workspace.has_production_tools() {
-        return;
-    }
-    if !matches!(editor.active_tool, ActiveTool::None | ActiveTool::VerticalSlice) {
+    // A tool belongs to the discipline whose cell arms it, both ways round:
+    // Drill & Blast's Move Collar is put down on the way out just as the
+    // drawing tools are on the way in.
+    let survives = match editor.active_tool {
+        ActiveTool::None | ActiveTool::VerticalSlice => true,
+        ActiveTool::MoveCollar | ActiveTool::RotateCollar | ActiveTool::TieHoles | ActiveTool::SetInitiationPoint => workspace == Workspace::DrillAndBlast,
+        _ => workspace.has_production_tools(),
+    };
+    if !survives {
         commands.push(UiCommand::SetActiveTool(ActiveTool::None));
     }
 }
@@ -442,7 +454,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             let has_selection = editor.selected_handles.iter().any(|handle| matches!(handle, SceneEntityId::Object(_)));
             context_submenu(ui, &tr!("ws-menubar-design-insert-point"), has_selection, |ui| {
                 // Needs two or more crossing polylines to insert anything.
-                if ContextMenuAction::new(&tr!("ws-menubar-design-insert-point-at-intersection"))
+                if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-intersection"))
                     .enabled(editor.selection_has_intersections)
                     .show(ui)
                     .clicked()
@@ -450,7 +462,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
                     commands.push(UiCommand::InsertPointsAtIntersections);
                     ui.close();
                 }
-                if ContextMenuAction::new(&tr!("ws-menubar-design-insert-point-at-elevation")).show(ui).clicked() {
+                if ContextMenuAction::new(tr!("ws-menubar-design-insert-point-at-elevation")).show(ui).clicked() {
                     commands.push(UiCommand::OpenInsertPointAtElevationDialog);
                     ui.close();
                 }
@@ -468,7 +480,7 @@ pub(crate) fn draw_workspace_menus(ui: &mut egui::Ui, editor: &EditorState, proj
             // Unlike the entries above this one runs with nothing
             // selected: the dialog seeds from the selection when there
             // is one, and otherwise you pick in the viewport with it open.
-            if ContextMenuAction::new(&tr!("ws-menubar-design-create-triangulation")).show(ui).clicked() {
+            if ContextMenuAction::new(tr!("ws-menubar-design-create-triangulation")).show(ui).clicked() {
                 commands.push(UiCommand::OpenCreateTriangulation);
                 ui.close();
             }

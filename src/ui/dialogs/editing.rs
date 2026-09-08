@@ -352,7 +352,7 @@ pub(crate) fn draw_insert_point_at_elevation_dialog(ui: &mut egui::Ui, editor: &
 /// A project is already open behind it - startup lands on an empty, never-saved
 /// one - so the splash is an offer, not a gate: Escape, a click on the backdrop,
 /// or `New project` all simply dismiss it and leave that project in place.
-pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorState, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectView, commands: &mut Vec<UiCommand>) {
     const PANEL_SIZE: f32 = 500.0;
     const COLUMN_WIDTH: f32 = 190.0;
     const ROW_HEIGHT: f32 = 22.0;
@@ -366,10 +366,6 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
     // among these: the splash is only up when nothing but the startup project
     // is open.
     let recent: Vec<&crate::ui::state::UiTrackedProjectEntry> = project.recent_projects().collect();
-
-    // Only the update notice below reads the editor, and that is native-only.
-    #[cfg(target_arch = "wasm32")]
-    let _ = editor;
 
     // The splash floats over a live window, so something has to catch the
     // clicks that dismiss it, or they would fall through to the viewport and
@@ -405,7 +401,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     egui::Panel::bottom("meta_splash").show_separator_line(false).show(ui, |ui| {
                         ui.horizontal_centered(|ui| {
                             ui.label(tr_format!(literal = "%app%: %release%", app = crate::APP_NAME, release = crate::APP_RELEASE));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label("GNU General Public License v3.0"));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(tr!(literal = "MIT License")));
                         });
                     });
 
@@ -476,14 +472,15 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                     // heading. The box presents its entries as one full-width
                     // scrolling list and keeps two rows visible at once.
                     let list_width = PANEL_SIZE - 60.0;
-                    if !recent.is_empty() {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                            ui.add_space(30.0);
-                            select_project_action_column(ui, tr!(literal = "Recent"), list_width, |ui| {
-                                draw_recent_projects(ui, &recent, list_width, RECENT_HEIGHT, ROW_HEIGHT, commands);
-                            });
+                    // Drawn even with nothing remembered: the splash keeps one
+                    // shape on every launch, and the empty box says where
+                    // projects will show up rather than leaving a hole.
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
+                        ui.add_space(30.0);
+                        select_project_action_column(ui, tr!(literal = "Recent"), list_width, |ui| {
+                            draw_recent_projects(ui, &recent, list_width, RECENT_HEIGHT, ROW_HEIGHT, commands);
                         });
-                    }
+                    });
                 });
 
             #[cfg(target_arch = "wasm32")]
@@ -508,37 +505,6 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, editor: &mut EditorS
                                 app = crate::APP_NAME
                             )));
                             ui.hyperlink_to(tr!(literal = "Download the free native version at our website ↗"), "https://inclinedesign.net");
-                        });
-                    });
-            }
-
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(newest_release) = editor.newer_release.as_deref() {
-                let notice_color = if ui.visuals().dark_mode {
-                    egui::Color32::from_rgb(125, 190, 255)
-                } else {
-                    egui::Color32::from_rgb(25, 95, 165)
-                };
-
-                ui.add_space(8.0);
-                egui::Frame::new()
-                    .fill(ui.visuals().window_fill())
-                    .stroke(egui::Stroke::new(1.0, notice_color))
-                    .corner_radius(3.0)
-                    .inner_margin(egui::Margin::symmetric(12, 9))
-                    .show(ui, |ui| {
-                        ui.set_width(PANEL_SIZE - 24.0);
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.label(egui::RichText::new(tr!("update-available", version = newest_release)).strong());
-                                ui.label(egui::RichText::new(tr!("update-current", version = crate::APP_RELEASE)).color(ui.visuals().weak_text_color()));
-                            });
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(MenuButton::new(tr!(literal = "Download")).primary().min_width(92.0)).clicked() {
-                                    ui.ctx().open_url(egui::OpenUrl::new_tab("https://inclinedesign.net/downloads/"));
-                                }
-                            });
                         });
                     });
             }
@@ -1217,41 +1183,92 @@ pub(crate) fn draw_relimit_dialog(ui: &mut egui::Ui, commands: &mut Vec<UiComman
 
 /// Draw the floating Move tool panel with dX/dY/dZ inputs and an Apply button.
 pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
-    ViewportDockPanel::new("move_panel", tr!(literal = "Move"), viewport_rect)
-        .min_width(210.0)
-        .show(ui.ctx(), |ui| {
-            let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world X axis."))
-                .speed(0.1)
-                .show(ui);
-            let dy_resp = MenuFieldF64::new(tr!(literal = "dY"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world Y axis."))
-                .speed(0.1)
-                .show(ui);
-            let dz_resp = MenuFieldF64::new(tr!(literal = "dZ"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
-                .help_text(tr!(literal = "Translation distance along the world Z axis."))
-                .speed(0.1)
-                .show(ui);
-            if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
-                commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
+    // One panel for both translate tools, titled by the one running it.
+    let title = if editor.active_tool == ActiveTool::MoveCollar {
+        tr!(literal = "Move Collar")
+    } else {
+        tr!(literal = "Move Design")
+    };
+    ViewportDockPanel::new("move_panel", title, viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
+        let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world X axis."))
+            .speed(0.1)
+            .show(ui);
+        let dy_resp = MenuFieldF64::new(tr!(literal = "dY"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world Y axis."))
+            .speed(0.1)
+            .show(ui);
+        let dz_resp = MenuFieldF64::new(tr!(literal = "dZ"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
+            .help_text(tr!(literal = "Translation distance along the world Z axis."))
+            .speed(0.1)
+            .show(ui);
+        if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
+            commands.push(UiCommand::PreviewMoveDelta(glam::DVec3::new(
+                editor.move_panel_delta[0],
+                editor.move_panel_delta[1],
+                editor.move_panel_delta[2],
+            )));
+        }
+
+        ui.add_space(4.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() {
+                commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
                     editor.move_panel_delta[0],
                     editor.move_panel_delta[1],
                     editor.move_panel_delta[2],
                 )));
+                editor.active_tool = ActiveTool::None;
+            }
+            if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
+                commands.push(UiCommand::CancelMoveDelta);
+                editor.active_tool = ActiveTool::None;
+            }
+        });
+    });
+}
+
+/// Draw the floating Rotate Collar panel: the two angles a drill plan is
+/// written in, and an Apply button.
+///
+/// The values are absolute, not a delta - a round is drilled at one angle, so
+/// Apply points every selected hole this way. A ring drag is the delta gesture,
+/// and it drives these same fields as it goes, so the panel always reads out
+/// the setup the holes are standing at.
+pub(crate) fn draw_rotate_collar_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
+    use crate::model::drill_hole::{CollarRotation, HoleOrientation, MAX_HOLE_DIP};
+
+    ViewportDockPanel::new("rotate_collar_panel", tr!(literal = "Rotate Collar"), viewport_rect)
+        .min_width(230.0)
+        .show(ui.ctx(), |ui| {
+            if editor.rotate_panel_mixed {
+                ui.label(tr!(literal = "Selected holes point different ways. Apply sets them all to these angles."));
+                ui.add_space(2.0);
+            }
+            let azimuth = MenuFieldF64::new(tr!(literal = "Azimuth"), &mut editor.rotate_panel_azimuth, 0.0..=360.0)
+                .help_text(tr!(literal = "Bearing the holes are drilled on, in degrees clockwise from grid north."))
+                .speed(0.25)
+                .show(ui);
+            let dip = MenuFieldF64::new(tr!(literal = "Dip"), &mut editor.rotate_panel_dip, -MAX_HOLE_DIP..=MAX_HOLE_DIP)
+                .help_text(tr!(literal = "Angle from horizontal, negative downwards: -90 is a vertical hole."))
+                .speed(0.25)
+                .show(ui);
+            let target = CollarRotation::Absolute(HoleOrientation {
+                azimuth: editor.rotate_panel_azimuth,
+                dip: editor.rotate_panel_dip,
+            });
+            if azimuth.changed() || dip.changed() {
+                commands.push(UiCommand::PreviewCollarRotation(target));
             }
 
             ui.add_space(4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add(MenuButton::new(tr!(literal = "Apply")).primary()).clicked() {
-                    commands.push(UiCommand::ApplyMoveDelta(glam::DVec3::new(
-                        editor.move_panel_delta[0],
-                        editor.move_panel_delta[1],
-                        editor.move_panel_delta[2],
-                    )));
+                    commands.push(UiCommand::ApplyCollarRotation);
                     editor.active_tool = ActiveTool::None;
                 }
                 if ui.add(MenuButton::new(tr!(literal = "Cancel"))).clicked() {
-                    commands.push(UiCommand::CancelMoveDelta);
+                    commands.push(UiCommand::CancelCollarRotation);
                     editor.active_tool = ActiveTool::None;
                 }
             });

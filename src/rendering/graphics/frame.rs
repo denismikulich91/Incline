@@ -196,6 +196,7 @@ impl<'a> Graphics<'a> {
                 editor,
                 document,
                 static_ids: self.static_strokes.claimed(),
+                fill_cache: &mut self.polyline_fill_cache,
                 text_system: &mut self.text_system,
                 lyon_buffer: &mut self.lyon_buffer,
                 stroke_vertex_buf: &mut self.stroke_vertex_buf,
@@ -406,7 +407,7 @@ impl<'a> Graphics<'a> {
         // Keep the engineering-drawing dialog's map preview current.
         self.refresh_plot_preview(editor, document, triangulations, block_models, drill_holes, point_clouds, rasters);
 
-        self.update_tool_projections(editor, document);
+        self.update_tool_projections(editor, document, drill_holes);
 
         let orbit_marker_screen = self.orbit_marker_screen_pos();
         let camera_active = self.is_camera_active();

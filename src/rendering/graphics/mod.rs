@@ -22,21 +22,21 @@ use crate::{
     },
     rendering::{
         BlockInstance, StrokeVertex, SurfaceVertex, Vertex,
-        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, screen_to_world_on_plane},
+        camera::{Camera, CameraController, CameraUniform, FlyCameraController, Projection, screen_to_world_on_plane, screen_to_world_on_view_plane},
         pick::{PickGeometry, PickRecord, TextPickRecord, pick_nearest, pick_text},
         query::SceneQuery,
         scene::{
             BlockModelGpuCache, DesignPointGpuCache, DrillCollarInstance, DrillHoleGpuCache, DrillSegmentInstance, EdgeInstance, PointCloudGpuCache, PointInstance, PointPosition,
             RasterGpuCache, StaticStrokeCache, TriangulationGpuCache,
             bounds::{scene_bounds, visible_object_aabbs},
-            build::{DocumentDrawBatch, DocumentPrimitive, DocumentRenderStage, TextDrawBatch},
+            build::{DocumentDrawBatch, DocumentPrimitive, DocumentRenderStage, PolylineFillCache, TextDrawBatch},
         },
         snap::SNAP_THRESHOLD_PX,
         text::TextSystem,
     },
     ui::{
         Gui,
-        state::{CursorMode, EditorState, UiFrameOutput, UiProjectView, ViewportRect},
+        state::{CursorMode, EditorState, TieInRef, UiFrameOutput, UiProjectView, ViewportRect},
     },
 };
 
@@ -291,6 +291,7 @@ pub(crate) struct Graphics<'a> {
     /// startup splash has gone, which is what retires the tracking.
     pub(super) startup_view_offset: Option<DVec2>,
     pub(super) lyon_buffer: VertexBuffers<Vertex, u32>,
+    pub(super) polyline_fill_cache: PolylineFillCache,
     pub(super) lyon_vertex_capacity: usize,
     pub(super) lyon_index_capacity: usize,
     pub(super) stroke_vertex_buf: Vec<StrokeVertex>,

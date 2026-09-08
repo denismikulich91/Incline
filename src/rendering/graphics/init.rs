@@ -821,11 +821,16 @@ impl<'a> Graphics<'a> {
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: scene_format,
-                        // The marker is a disc cut out of its quad, so its rim
-                        // needs coverage blending to stay round rather than
-                        // stepped. Only that one-pixel rim is ever blended.
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
+                        // The disc's rim is antialiased by coverage, not by
+                        // blending: a blended rim would also write depth at
+                        // partial opacity, and the scene geometry that draws
+                        // after the collars would then be depth-rejected in
+                        // that one-pixel ring, leaving it composited against
+                        // the clear colour as a dark outline. Alpha is the
+                        // coverage mask below and never reaches the target,
+                        // so this writes colour only.
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::COLOR,
                     })],
                 }),
                 primitive: wgpu::PrimitiveState {
@@ -837,7 +842,10 @@ impl<'a> Graphics<'a> {
                 multisample: wgpu::MultisampleState {
                     count: sample_count,
                     mask: !0,
-                    alpha_to_coverage_enabled: false,
+                    // The rim's fractional alpha becomes a sample mask, so an
+                    // uncovered sample keeps both the colour and the depth of
+                    // whatever stands behind the marker.
+                    alpha_to_coverage_enabled: true,
                 },
                 multiview_mask: None,
                 cache: None,
@@ -1516,6 +1524,7 @@ impl<'a> Graphics<'a> {
             last_text_cache_trim_frame: 0,
             last_interaction: None,
             geometry_dirty: true,
+            polyline_fill_cache: Default::default(),
             cached_document_revision: u64::MAX,
             cached_render_style_key: None,
             cached_bounds_document_revision: u64::MAX,

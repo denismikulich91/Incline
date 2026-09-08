@@ -89,6 +89,26 @@ pub(crate) enum LanguageChoice {
     Farsi,
     #[serde(rename = "hi")]
     Hindi,
+    #[serde(rename = "de")]
+    German,
+    #[serde(rename = "it")]
+    Italian,
+    #[serde(rename = "pl")]
+    Polish,
+    #[serde(rename = "tr")]
+    Turkish,
+    #[serde(rename = "vi")]
+    Vietnamese,
+    #[serde(rename = "mn")]
+    Mongolian,
+    #[serde(rename = "sw")]
+    Swahili,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "ko")]
+    Korean,
+    #[serde(rename = "uk")]
+    Ukrainian,
 }
 
 impl Default for LanguageChoice {
@@ -104,7 +124,7 @@ impl Default for LanguageChoice {
 
 impl LanguageChoice {
     /// Every value, in the order the status bar's picker lists them.
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 20] = [
         Self::English,
         Self::Spanish,
         Self::Portuguese,
@@ -115,6 +135,16 @@ impl LanguageChoice {
         Self::Arabic,
         Self::Farsi,
         Self::Hindi,
+        Self::German,
+        Self::Italian,
+        Self::Polish,
+        Self::Turkish,
+        Self::Vietnamese,
+        Self::Mongolian,
+        Self::Swahili,
+        Self::Japanese,
+        Self::Korean,
+        Self::Ukrainian,
     ];
 
     /// How this language names itself, in its own script. Never translated:
@@ -132,6 +162,16 @@ impl LanguageChoice {
             Self::Arabic => "العربية",
             Self::Farsi => "فارسی",
             Self::Hindi => "हिन्दी",
+            Self::German => "Deutsch",
+            Self::Italian => "Italiano",
+            Self::Polish => "Polski",
+            Self::Turkish => "Türkçe",
+            Self::Vietnamese => "Tiếng Việt",
+            Self::Mongolian => "Монгол",
+            Self::Swahili => "Kiswahili",
+            Self::Japanese => "日本語",
+            Self::Korean => "한국어",
+            Self::Ukrainian => "Українська",
         }
     }
 
@@ -148,6 +188,16 @@ impl LanguageChoice {
             Self::Arabic => langid!("ar"),
             Self::Farsi => langid!("fa"),
             Self::Hindi => langid!("hi"),
+            Self::German => langid!("de"),
+            Self::Italian => langid!("it"),
+            Self::Polish => langid!("pl"),
+            Self::Turkish => langid!("tr"),
+            Self::Vietnamese => langid!("vi"),
+            Self::Mongolian => langid!("mn"),
+            Self::Swahili => langid!("sw"),
+            Self::Japanese => langid!("ja"),
+            Self::Korean => langid!("ko"),
+            Self::Ukrainian => langid!("uk"),
         }
     }
 
@@ -190,8 +240,19 @@ pub(crate) fn available_languages() -> Vec<LanguageIdentifier> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn system_languages() -> Vec<LanguageIdentifier> {
-    use i18n_embed::LanguageRequester;
-    i18n_embed::DesktopLanguageRequester::new().requested_languages()
+    sys_locale::get_locales().filter_map(|locale| parse_system_language(&locale)).collect()
+}
+
+/// Convert platform locale spellings such as `en_US.UTF-8` into Unicode
+/// language identifiers. `C` and `POSIX` deliberately mean no language; the
+/// caller will use English when they are the only configured locales.
+#[cfg(not(target_arch = "wasm32"))]
+fn parse_system_language(locale: &str) -> Option<LanguageIdentifier> {
+    let locale = locale.split(['.', '@']).next().unwrap_or(locale);
+    if locale.eq_ignore_ascii_case("c") || locale.eq_ignore_ascii_case("posix") {
+        return None;
+    }
+    locale.replace('_', "-").parse().ok()
 }
 
 #[cfg(target_arch = "wasm32")]

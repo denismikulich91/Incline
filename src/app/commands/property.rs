@@ -21,9 +21,9 @@ macro_rules! batch_property {
             })
             .collect();
         if !cmds.is_empty() {
-            $self.history.execute(doc, Command::Batch(cmds));
+            $self.execute_edit(Command::Batch(cmds));
         }
-        userspace_log!("{}", tr_format!(literal = $log, count = $ids.len() $(, $arg_name = $arg)*));
+        $self.log_when_gesture_ends(tr_format!(literal = $log, count = $ids.len() $(, $arg_name = $arg)*));
         $self.invalidate_geometry();
     }};
 }
@@ -38,7 +38,7 @@ impl<'a> App<'a> {
                     Object::Point { color, .. } | Object::Polyline { color, .. } | Object::Text { color, .. } => *color = new_color,
                 }
             },
-            "Batch-set color on {} object(s)"
+            "Batch-set color on %count% object(s)"
         );
     }
 
@@ -51,7 +51,7 @@ impl<'a> App<'a> {
                     *c = closed;
                 }
             },
-            "Batch-set closed on {} polyline(s)"
+            "Batch-set closed on %count% polyline(s)"
         );
     }
 
@@ -64,7 +64,7 @@ impl<'a> App<'a> {
                     *fill = new_fill;
                 }
             },
-            "Batch-set fill style on {} object(s)"
+            "Batch-set fill style on %count% object(s)"
         );
     }
 
@@ -77,7 +77,7 @@ impl<'a> App<'a> {
                     *line_weight = weight;
                 }
             },
-            "Batch-set line weight on {} polyline(s)"
+            "Batch-set line weight on %count% polyline(s)"
         );
     }
 
@@ -88,7 +88,7 @@ impl<'a> App<'a> {
             |obj: &mut Object| {
                 obj.set_axis_position(axis, value);
             },
-            "Batch-set {1} value on {0} object(s)",
+            "Batch-set %axis% value on %count% object(s)",
             axis = axis.label()
         )
     }
@@ -133,7 +133,7 @@ impl<'a> App<'a> {
             return;
         }
 
-        self.history.execute(doc, Command::Batch(cmds));
+        self.execute_edit(Command::Batch(cmds));
         self.editor.selected_handles = selected_after.into_iter().map(SceneEntityId::Object).collect();
         self.invalidate_geometry();
         let action = if copy {

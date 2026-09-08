@@ -5,6 +5,19 @@ use winit::keyboard::PhysicalKey;
 use super::{frustum::Frustum, *};
 use crate::rendering::pick::{clamped_range, triangle_weights};
 
+/// Ground distance a view with nothing to frame spans across the viewport, in
+/// metres. Mine design starts at pit scale, so an empty scene opens on a few
+/// hundred metres rather than the couple of metres a unit zoom would give.
+const DEFAULT_VIEW_WIDTH: f64 = 200.0;
+
+/// Ortho half-height that puts [`DEFAULT_VIEW_WIDTH`] across the viewport at
+/// this aspect ratio - the fallback zoom whenever there are no extents to fit.
+fn default_zoom(aspect: f64) -> f64 {
+    // A degenerate surface (zero width, a minimised window) would otherwise
+    // turn a near-zero aspect into an astronomical half-height.
+    DEFAULT_VIEW_WIDTH / (2.0 * aspect.clamp(0.1, 10.0))
+}
+
 /// Merge per-object AABBs into a single scene AABB, or `None` when empty.
 fn merge_aabbs(aabbs: &[(DVec3, DVec3)]) -> Option<(DVec3, DVec3)> {
     aabbs.iter().copied().reduce(|(acc_min, acc_max), (min, max)| (acc_min.min(min), acc_max.max(max)))
@@ -332,17 +345,34 @@ impl<'a> Graphics<'a> {
         (near, (far - near).normalize())
     }
 
-    /// World coordinate under the current cursor on the plane `z = plane_z`,
-    /// using the last cursor position tracked by the camera controller.
+    /// World coordinate under the current cursor, using the last cursor
+    /// position tracked by the camera controller. In plan and 3D views the
+    /// point lies on the plane `z = plane_z`; in the vertical slice view it
+    /// lies on the section plane and `plane_z` is ignored.
     pub(crate) fn cursor_world(&self, plane_z: f64) -> Option<DVec3> {
-        // A slice camera looks horizontally, so it never intersects a
-        // horizontal Z plane. In that view the useful drawing surface is the
-        // vertical slice plane at the camera target depth.
-        if self.slice_view.is_some() {
-            return Some(self.unexaggerate_point(self.cursor_world_at_target_depth()));
-        }
         let screen = self.screen_size();
         let aspect = screen.0 as f64 / screen.1.max(1.0) as f64;
+        // A slice camera looks horizontally, so it never intersects a
+        // horizontal Z plane. The point wanted there is on the section itself,
+        // which is the plane through `camera.position`: `update_slice_camera`
+        // parks the camera on the section so the symmetric znear/zfar slab is
+        // centred there. `cursor_world_at_target_depth` cannot serve, because
+        // it builds the point at the camera target instead - `zoom.max(1.0)`
+        // metres in front of the section, by a distance that changes with
+        // zoom. Two measurement picks at the same zoom carried the same offset
+        // and it cancelled, but a scroll between the picks put them on
+        // different parallel planes and the distance came out wrong, and any
+        // point placed on the section would have landed off it, where the
+        // half-slab-width projection clips.
+        if self.slice_view.is_some() {
+            let on_section = screen_to_world_on_view_plane(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc);
+            // This point feeds the coordinate readout and the measure tools, and
+            // any tool that places geometry on the section, so it can end up in
+            // the document and in a saved file. A degenerate viewport would make
+            // it non-finite; report no cursor instead, the way the plan view's
+            // `screen_to_world_on_plane` reports a view it cannot solve.
+            return on_section.is_finite().then(|| self.unexaggerate_point(on_section));
+        }
         let displayed_plane_z = self.scene_origin.z + (plane_z - self.scene_origin.z) * self.vertical_exaggeration;
         screen_to_world_on_plane(&self.camera, self.projection.zoom, aspect, screen, self.camera_controller.mouse_loc, displayed_plane_z)
             .map(|point| self.unexaggerate_point(point))
@@ -464,7 +494,18 @@ impl<'a> Graphics<'a> {
         let view_proj = self.view_proj();
         let screen = self.screen_size();
         let (ray_origin, ray_direction) = self.cursor_model_ray();
-        let drill_hole = SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, ray_direction, &view_proj, screen, threshold_px).map(|(hole, world)| ScenePick {
+        let drill_hole = SceneQuery::nearest_drill_hole(
+            drill_holes,
+            hidden,
+            frozen,
+            ray_origin,
+            ray_direction,
+            self.camera.forward(),
+            &view_proj,
+            screen,
+            threshold_px,
+        )
+        .map(|(hole, world)| ScenePick {
             entity: SceneEntityId::DrillHole(hole.dataset),
             world,
             hole: Some(hole),
@@ -670,6 +711,55 @@ impl<'a> Graphics<'a> {
         hits
     }
 
+    /// The tie-in connectors a Drill & Blast selection rectangle takes.
+    ///
+    /// Crossing selection accepts a connector that touches the box; window
+    /// selection requires both ends, and therefore the whole straight
+    /// connector, to be inside it.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn tie_ins_in_screen_rect(
+        &self,
+        drill_holes: &[OpenDrillHoleDataset],
+        start_px: (f32, f32),
+        end_px: (f32, f32),
+        cross_select: bool,
+        hidden: &HashSet<SceneEntityId>,
+        frozen: &HashSet<SceneEntityId>,
+    ) -> Vec<TieInRef> {
+        let rect = ScreenRect::new(self.window_to_viewport_px(start_px), self.window_to_viewport_px(end_px));
+        let view_proj = self.view_proj();
+        let screen = self.screen_size();
+        let mut hits = Vec::new();
+
+        for dataset in drill_holes.iter().filter(|dataset| dataset.state.loaded && dataset.visible) {
+            let entity = dataset.entity_id();
+            if hidden.contains(&entity) || frozen.contains(&entity) {
+                continue;
+            }
+            for tie in &dataset.dataset.ties {
+                let (Some(from), Some(to)) = (dataset.dataset.holes.get(tie.from), dataset.dataset.holes.get(tie.to)) else {
+                    continue;
+                };
+                let (Some(a), Some(b)) = (
+                    crate::rendering::pick::world_to_screen(&view_proj, from.collar_position(), screen),
+                    crate::rendering::pick::world_to_screen(&view_proj, to.collar_position(), screen),
+                ) else {
+                    continue;
+                };
+                let taken = if cross_select {
+                    segment_intersects_rect(a, b, rect.min_x, rect.max_x, rect.min_y, rect.max_y)
+                } else {
+                    rect.contains(a) && rect.contains(b)
+                };
+                if taken {
+                    hits.push(TieInRef::new(dataset.id, tie.from, tie.to));
+                }
+            }
+        }
+
+        hits
+    }
+
     /// Begin an orbit with the anchor at the surface or geometry point under the cursor.
     /// Falls back to the current-target depth when nothing is hit.
     /// Called from the app level where triangulations are available.
@@ -705,7 +795,8 @@ impl<'a> Graphics<'a> {
         } else {
             let (ray_origin, direction) = self.cursor_model_ray();
             let triangulation_hit = SceneQuery::nearest_surface(triangulations, hidden, Some(frozen), ray_origin, direction).map(|(_, world)| world);
-            let drill_hole_hit = SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, &view_proj, screen, 0.0).map(|(_, world)| world);
+            let drill_hole_hit =
+                SceneQuery::nearest_drill_hole(drill_holes, hidden, frozen, ray_origin, direction, self.camera.forward(), &view_proj, screen, 0.0).map(|(_, world)| world);
             let block_model_hit = self.block_model_gpu.nearest_visible_hit(ray_origin, direction, hidden, frozen);
             // A point cloud has no ray-castable surface, so pivot on the nearest
             // splat under the cursor instead - otherwise orbiting over a selected
@@ -801,7 +892,7 @@ impl<'a> Graphics<'a> {
                 let size = max - min;
                 // Degenerate (single point or all collinear on one axis): unit zoom.
                 if size.length() < 1e-6 {
-                    (center, 1.0_f64)
+                    (center, default_zoom(aspect))
                 } else {
                     // Plan view: right == X, up == Y.
                     let zoom_h = size.y / 2.0;
@@ -810,7 +901,7 @@ impl<'a> Graphics<'a> {
                     (center, zoom_h.max(zoom_w) * 1.1)
                 }
             }
-            None => (DVec3::ZERO, 1.0_f64),
+            None => (DVec3::ZERO, default_zoom(aspect)),
         };
 
         let zoom = zoom.max(1e-4);
@@ -895,7 +986,7 @@ impl<'a> Graphics<'a> {
         let screen = self.screen_size();
         let aspect = (screen.0 as f64 / screen.1.max(1.0) as f64).max(1e-9);
         let zoom = if half_w <= 1e-9 && half_h <= 1e-9 {
-            1.0
+            default_zoom(aspect)
         } else {
             // 10 % padding, matching fit_to_extents.
             (half_h.max(half_w / aspect) * 1.1).max(1e-4)
