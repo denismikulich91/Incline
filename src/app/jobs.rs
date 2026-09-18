@@ -64,9 +64,17 @@ pub(crate) enum JobKey {
     PointCloud(crate::model::point_cloud::PointCloudId),
     BlockModel(crate::model::block_model::BlockModelId),
     DrillHole(crate::model::drill_hole::DrillHoleId),
+    Raster(crate::model::raster::RasterTextureId),
     Project {
         runtime_id: u32,
         document_revision: u64,
+    },
+    /// A browser project save whose OMF encoding runs on a worker. Never tied
+    /// to the project's revision: the snapshot was taken when the save was
+    /// asked for and has to reach storage even if the document has moved on.
+    #[cfg(target_arch = "wasm32")]
+    BrowserProjectSave {
+        runtime_id: u32,
     },
     /// A job not tied to any tracked source (always applied).
     #[allow(dead_code)]
@@ -195,6 +203,7 @@ impl<'a> App<'a> {
             JobKey::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == id),
             JobKey::BlockModel(id) => self.block_models.iter().any(|item| item.id == id),
             JobKey::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == id),
+            JobKey::Raster(id) => self.raster_textures.iter().any(|item| item.id == id),
             JobKey::Project { runtime_id, document_revision } => self
                 .workspace
                 .projects
@@ -212,6 +221,8 @@ impl<'a> App<'a> {
                 self.workspace.active_project().is_some_and(|project| project.runtime_id == runtime_id)
                     && self.project_item_state(item).is_some_and(|state| state.revision() == revision)
             }
+            #[cfg(target_arch = "wasm32")]
+            JobKey::BrowserProjectSave { .. } => true,
             JobKey::Anonymous => true,
         })
     }

@@ -44,6 +44,7 @@ menu-view = Вид
 ws-production = Производство
 ws-drill-and-blast = БВР
 ws-geology = Геология
+ws-planning = Планирование
 
 
 ## Menubars
@@ -74,11 +75,14 @@ dialog-delete-title = Удалить: { $kind }
 dialog-delete-confirm =
     Удалить «{ $name }» из проекта?
     Это действие нельзя отменить.
+confirm-delete-product =
+    Удалить продукт «{ $name }» из палитры?
+    Это действие нельзя отменить.
 
 ## Диалог «Создать триангуляцию»
 
 tri-create-title = Создать триангуляцию
-tri-create-help = Кликните по объектам в области просмотра, чтобы выбрать или снять выбор. Для рамочного выбора протяните курсор.
+tri-create-help = Щёлкайте по объектам в области просмотра, чтобы выбрать или снять выбор. Для рамочного выбора протяните курсор.
 tri-create-type-label = Тип триангуляции
 tri-create-type-help =
     «Открытая поверхность» создаёт полотно рельефного типа. «Тело» создаёт
@@ -163,6 +167,7 @@ literal-dpi-ea8bb072eb8f72fe =  dpi
 literal-m-07c55b07b48e5196 =  m
 literal-mm-c2aba917cdd54d81 =  mm
 literal-ms-c2ab9317cdd5281f =  ms
+literal-presents-in-step-with-the-display-no-tearing-and-the-display-sets-the-frame-rate-off-frames-present-as-soon-as-they-are-drawn-and-the-cap-below-applies-64ea7eadf9d8d57d = Отображается синхронно с экраном: без разрывов кадра, частоту кадров задаёт экран. При отключении кадры отображаются сразу после отрисовки, и применяется ограничение ниже.
 literal-value-af63984c86017900 = %
 literal-blank-header-9e3de72dec9fa577 = (пустые заголовки)
 literal-absolute-rl-455fe0d96abfbb7a = Абсолютная RL
@@ -218,24 +223,24 @@ literal-chunks-d8bf831735fec9eb = Фрагменты: --
 literal-clear-b4f1dffbb6be6302 = Очистить
 literal-clear-active-triangulation-texture-c6e59e6fb11f5b94 = Очистить текстуру активной триангуляции
 literal-clear-raster-ef94c7849961e88f = Очистить растр
-literal-click-a-closed-polyline-in-the-viewport-0d67057363f55048 = Кликните по замкнутой полилинии в области просмотра.
-literal-click-a-corner-on-a-closed-polyline-e58aa372632bbee1 = Кликните по углу на замкнутой полилинии.
-literal-click-a-perimeter-point-or-type-a-radius-3377e2b210511869 = Кликните точку периметра или введите радиус
-literal-click-a-vertex-to-start-the-replacement-span-b501eed8ebcccc66 = Кликните вершину, чтобы начать участок замены.
-literal-click-an-open-or-closed-polyline-to-begin-29e6e0b812f8a809 = Кликните по открытой или замкнутой полилинии, чтобы начать.
-literal-click-first-vertex-ffe1ab3e9fc280fd = Кликните первую вершину
-literal-click-second-vertex-6e5f569e79a7b1d1 = Кликните вторую вершину
-literal-click-the-circle-centre-3a5ff1e3350dba33 = Кликните центр окружности
-literal-click-the-first-point-of-the-slice-line-ac432081a454588a = Кликните первую точку линии среза
-literal-click-the-line-to-intersect-with-04c72ce41ff39c06 = Кликните линию для пересечения…
-literal-click-the-pit-or-stockpile-solid-in-the-viewport-f9a22170d95cc22d = Кликните тело карьера или склада в области просмотра.
-literal-click-the-pit-shell-in-the-viewport-f0076fd01596087d = Кликните оболочку карьера в области просмотра.
-literal-click-the-second-point-of-the-slice-line-f96caa9d223ac34c = Кликните вторую точку линии среза
-literal-click-the-second-vertex-of-the-replacement-span-6cfee262694ff81e = Кликните вторую вершину участка замены.
-literal-click-the-surface-in-the-viewport-dbfc642a011d5285 = Кликните поверхность в области просмотра.
-literal-click-the-topology-in-the-viewport-6686c4c01f24216b = Кликните топологию в области просмотра.
-literal-click-to-edit-color-right-click-to-remove-b4ec7d2c42ff9af8 = Кликните, чтобы изменить цвет; Кликните правой кнопкой, чтобы удалить
-literal-click-to-type-this-boundary-s-value-a81a6463afc202d1 = Кликните, чтобы ввести значение этой границы
+literal-click-a-closed-polyline-in-the-viewport-0d67057363f55048 = Щёлкните по замкнутой полилинии в области просмотра.
+literal-click-a-corner-on-a-closed-polyline-e58aa372632bbee1 = Щёлкните по углу на замкнутой полилинии.
+literal-click-a-perimeter-point-or-type-a-radius-3377e2b210511869 = Щёлкните точку периметра или введите радиус
+literal-click-a-vertex-to-start-the-replacement-span-b501eed8ebcccc66 = Щёлкните вершину, чтобы начать участок замены.
+literal-click-an-open-or-closed-polyline-to-begin-29e6e0b812f8a809 = Щёлкните по открытой или замкнутой полилинии, чтобы начать.
+literal-click-first-vertex-ffe1ab3e9fc280fd = Щёлкните первую вершину
+literal-click-second-vertex-6e5f569e79a7b1d1 = Щёлкните вторую вершину
+literal-click-the-circle-centre-3a5ff1e3350dba33 = Щёлкните центр окружности
+literal-click-the-first-point-of-the-slice-line-ac432081a454588a = Щёлкните первую точку линии среза
+literal-click-the-line-to-intersect-with-04c72ce41ff39c06 = Щёлкните линию для пересечения…
+literal-click-the-pit-or-stockpile-solid-in-the-viewport-f9a22170d95cc22d = Щёлкните тело карьера или склада в области просмотра.
+literal-click-the-pit-shell-in-the-viewport-f0076fd01596087d = Щёлкните оболочку карьера в области просмотра.
+literal-click-the-second-point-of-the-slice-line-f96caa9d223ac34c = Щёлкните вторую точку линии среза
+literal-click-the-second-vertex-of-the-replacement-span-6cfee262694ff81e = Щёлкните вторую вершину участка замены.
+literal-click-the-surface-in-the-viewport-dbfc642a011d5285 = Щёлкните поверхность в области просмотра.
+literal-click-the-topology-in-the-viewport-6686c4c01f24216b = Щёлкните топологию в области просмотра.
+literal-click-to-edit-color-right-click-to-remove-b4ec7d2c42ff9af8 = Щёлкните, чтобы изменить цвет; щёлкните правой кнопкой, чтобы удалить
+literal-click-to-type-this-boundary-s-value-a81a6463afc202d1 = Щёлкните, чтобы ввести значение этой границы
 literal-clip-3e092e9d1ee2c5bb = Отсечение
 literal-clip-surface-by-polyline-82341a8fe6fe78b7 = Отсечь поверхность полилинией
 literal-clip-surface-by-polyline-8b0f1fd0fd4355f3 = Отсечь поверхность полилинией...
@@ -308,7 +313,7 @@ literal-discard-layer-changes-6fe6b070af75da55 = Отбросить измене
 literal-discard-project-changes-7a464be3c386e141 = Отбросить изменения в проекте
 literal-discard-and-replace-project-a4e735e8d1b79f21 = Отбросить и заменить проект
 literal-distance-30d8afddc9716922 = Расстояние
-literal-double-click-to-add-a-boundary-here-36353d378c6510e6 = Дважды Кликните, чтобы добавить границу здесь
+literal-double-click-to-add-a-boundary-here-36353d378c6510e6 = Дважды щёлкните, чтобы добавить границу здесь
 literal-down-032c13736048bf35 = Вниз
 literal-download-d3386a2ef42e80b9 = Скачать
 literal-downscale-rasters-f434c422f8d88ffb = Понизить разрешение растров
@@ -330,6 +335,12 @@ literal-exit-application-206c61fdca9522f7 = Выйти из приложения
 literal-exit-incline-design-b11cdc542f0e84ef = Выйти из Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Выйти без сохранения
 literal-exit-slice-ec67c9da3a320e5f = Выйти из режима среза
+literal-set-section-grid-0317412c52213ca8 = Задать сетку сечения
+literal-hide-rl-grid-5777afd90dcfdfef = Скрыть сетку отметок
+literal-show-rl-grid-87a5e28c30f9ca36 = Показать сетку отметок
+literal-e-08faea07b5959400 = В
+literal-n-09208c07b5b5c383 = С
+literal-set-section-grid-enabled-4477cb755937abe4 = Сетка сечения включена = %enabled%
 literal-export-293aa6a6446fb153 = Экспорт
 literal-export-block-model-csv-3755a5af2dbb71af = Экспорт блочной модели в CSV
 literal-export-csv-block-model-5c2ba2182ac51797 = Экспорт блочной модели CSV
@@ -372,7 +383,7 @@ literal-hide-all-15d259113e947092 = Скрыть все
 literal-hide-selection-b83e537e7d9fcc13 = Скрыть выбор
 literal-hide-and-unload-sources-8047096fcc7ddb85 = Скрыть и выгрузить источники
 literal-horizontal-width-of-each-flat-berm-between-successive-batters-a83e42804b968dbc = Горизонтальная ширина каждой плоской бермы между последовательными откосами уступов.
-literal-hover-to-choose-which-end-to-move-then-click-to-confirm-69b6eb39086a0553 = Наведите курсор, чтобы выбрать, какой конец переместить, затем Кликните для подтверждения.
+literal-hover-to-choose-which-end-to-move-then-click-to-confirm-69b6eb39086a0553 = Наведите курсор, чтобы выбрать, какой конец переместить, затем щёлкните для подтверждения.
 literal-import-3914cb410fca44d4 = Импорт
 literal-import-csv-block-model-b4c8ad42fe2cd4fc = Импорт блочной модели CSV
 literal-import-dxf-d96c811de1e76f42 = Импорт DXF
@@ -403,6 +414,7 @@ literal-lists-the-visible-surfaces-and-design-layers-with-their-colours-4e2dad83
 literal-load-4f20edb48a6287c9 = Загрузить
 literal-load-block-model-9e1eebcd6fc9e399 = Загрузить блочную модель
 literal-load-drillholes-0e0c59498b0a629f = Загрузить скважины
+literal-load-layer-c8261cf60e655064 = Загрузить слой
 literal-load-point-cloud-348b63ef7b0faa4a = Загрузить облако точек
 literal-load-project-645e82ec5117c718 = Загрузить проект
 literal-load-raster-5393aaf7183657c2 = Загрузить растр
@@ -448,8 +460,11 @@ literal-near-clip-limit-25931ba2c7873778 = Ближний предел отсе�
 literal-new-product-6c2124d5d6badd3a = Новый продукт
 literal-new-project-cd084c5e5d3ea300 = Новый проект
 literal-new-layer-name-e4ea5292efa5d03f = Название нового слоя
+literal-no-delay-product-to-tie-with-6d3f8682539b125f = Нет продукта замедления для соединения
+literal-right-click-the-delay-palette-heading-to-add-one-797c2e29b8b625b9 = щёлкните правой кнопкой по заголовку палитры задержек, чтобы добавить
 literal-no-matches-28d7266643f5992f = Совпадений нет
 literal-no-object-selected-d42da7912e4d01b6 = Нет выбранного объекта
+literal-no-products-483f3f49aae9b3c2 = Нет продуктов
 literal-no-spatial-extent-available-8b8bb3fbeb49cfb1 = Пространственные границы недоступны
 literal-none-669b18c6d2d9c95b = Нет
 literal-north-arrow-0a1293ff4a52606d = Северная стрела
@@ -478,7 +493,8 @@ literal-plan-mode-a6e837218738a71d = Режим плана
 literal-point-cloud-ef650548cfd32358 = Облако точек
 literal-point-clouds-9bcb25b923c4c211 = Облака точек
 literal-press-enter-to-use-the-typed-radius-d2d16a3810df7ec3 = Нажмите Enter, чтобы использовать введённый радиус
-literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = или Кликните, чтобы использовать радиус указателя
+literal-or-click-to-use-the-pointer-radius-23f70c869be82b5e = или щёлкните, чтобы использовать радиус указателя
+literal-product-de1f02481331134c = Продукт
 literal-project-282049f502eac1de = Проект
 literal-project-name-446c46bc623ccce1 = Название проекта
 literal-quit-app-fa0a388754b23d8b = Выйти из %app%
@@ -630,6 +646,9 @@ literal-undrape-raster-19a3cb862f76d539 = Убрать наложение рас
 literal-undrape-rasters-08281f02a6ec6cbe = Убрать наложение растров
 literal-unload-5d3714bc882df1b2 = Выгрузить
 literal-unload-block-model-c14323e196f7603e = Выгрузить блочную модель
+literal-unload-drillholes-b63232aa559b051e = Выгрузить скважины
+literal-unload-layer-e19afae5689edebb = Выгрузить слой
+literal-unload-point-cloud-2d0ee38fa0391df9 = Выгрузить облако точек
 literal-unload-raster-19854bae2aea221f = Выгрузить растр
 literal-unload-triangulation-a6ecfc8d6ca4e72d = Выгрузить триангуляцию
 literal-unlock-5d303fbc88281c15 = Разблокировать
@@ -640,6 +659,7 @@ literal-use-the-full-surface-elevation-range-6a31e7a1f3c78f71 = Использо
 literal-vertex-count-48fab462ae06a454 = Количество вершин
 literal-vertical-exaggeration-3572327bb13435e7 = Вертикальное преувеличение
 literal-vertical-rise-or-fall-of-each-bench-before-the-next-berm-is-created-077196b60f82120b = Вертикальный подъём или спуск каждого уступа до создания следующей бермы.
+literal-vertical-sync-85fd0e942adbf2be = Вертикальная синхронизация
 literal-visualises-the-morton-spatial-chunking-used-for-frustum-culling-d516660d6f3c6016 = Визуализирует пространственное расчленение Мортона, используемое для отсечение по пирамиде видимости.
 literal-website-82665b2ffabc9c0a = Сайт
 literal-weld-retry-b6c826b7541e89f1 = Сварить и повторить
@@ -829,6 +849,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = Раст�
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = Этот элемент больше не относится к активному проекту
 literal-renamed-before-to-name-88160afa8287cd38 = «%before%» переименовано в «%name%»
 literal-exited-slice-view-0d1f935a85f65cd3 = Режим сечения закрыт
+literal-reset-the-section-view-a90255a33a618651 = Сбросить вид сечения
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = Текст объекта %object_id% обновлён
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = Редактирование текста объекта %object_id% завершено
 literal-contour-generation-failed-error-60e87eda1ee29afa = Ошибка создания горизонталей: %error%
@@ -944,7 +965,7 @@ literal-ply-ply-6ebd87752b4e76b4 = PLY (.ply)
 literal-las-laz-las-laz-e565aac4d9bb8625 = LAS / LAZ (.las, .laz)
 literal-point-cloud-data-pcd-d88f4be3fd2ef958 = Данные облака точек (.pcd)
 literal-comma-separated-values-csv-e98eac2bf14a98bd = Значения, разделённые запятыми (.csv)
-literal-mapped-csv-bundle-csv-c3b487cd838e374f = Таблицы баз данных CSV (.csv)
+literal-mapped-csv-bundle-csv-c3b487cd838e374f = Сопоставленный пакет CSV (.csv)
 literal-textures-06eaee20d025f545 = Текстуры
 literal-geotiff-tif-tiff-a4c8f984908d6d8c = GeoTIFF (.tif, .tiff)
 literal-no-omf-chosen-0998297ae4891598 = Файл .omf не выбран
@@ -1131,6 +1152,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Отключить режим п�
 literal-enable-flying-mode-5be056d1b9bdd218 = Включить режим полёта
 literal-exit-slice-view-8f48e630d38a6390 = Выйти из режима сечения
 literal-vertical-slice-view-a721497b5e8007fa = Вертикальное сечение
+literal-reset-section-view-569ba01ea5ad8448 = Сбросить вид сечения
+literal-camera-square-to-the-section-095beff203b315a6 = Камера перпендикулярно сечению
 literal-hide-wireframes-a0bb1a91dde72948 = Скрыть каркасы
 literal-show-wireframes-7e8dc68f7023441b = Показать каркасы
 literal-hide-points-6ec095fdf7ed73f4 = Скрыть точки
@@ -1142,6 +1165,9 @@ literal-value-dip-1a0edf99f1cb897b = падение %value%°
 literal-strike-strike-dip-3cbc18ac238a6a85 = простирание %strike%° · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (горизонтально, без простирания)
 literal-slice-view-531d1a0f0f256066 = Режим сечения
+slice-viewport-gestures = перетаскивание средней кнопкой: панорама · перетаскивание правой кнопкой: орбита · Shift+колесо: перемещение · W/S: сдвиг слоя · Q/E: поворот · Esc: выход
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% — недоступно в виде сечения
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = Этот инструмент недоступен в виде сечения
 literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = перетаскивание средней кнопкой — панорама · W/S — перемещение слоя · Q/E — поворот · Esc — выход
 literal-north-ca6a42d80c5dd964 = Север
 literal-south-25b5d0c70a3936da = Юг
@@ -1210,7 +1236,7 @@ literal-blank-05d9e0598fc96cf6 = (пусто)
 literal-empty-hidden-9912adc75a8db73a = (пусто · скрыто)
 literal-empty-0cb58b957b951fb5 = (пусто)
 literal-no-data-for-this-variable-d4d3a88884dd02d1 = Нет данных для этой переменной
-literal-drag-to-move-right-click-to-remove-middle-click-toggles-487f64ad1eafa437 = Перетащите для перемещения · Кликните правой кнопкой для удаления · Средняя кнопка переключает ≤
+literal-drag-to-move-right-click-to-remove-middle-click-toggles-487f64ad1eafa437 = Перетащите для перемещения · Щёлкните правой кнопкой для удаления · Средняя кнопка переключает ≤
 literal-drag-to-move-middle-click-toggles-51333dbee702d1c2 = Перетащите для перемещения · Средняя кнопка переключает ≤
 literal-count-category-86a2438ef18602b2 = Категорий: %count%
 literal-count-categories-ef8d801ad5b6e962 = Категорий: %count%
@@ -1505,9 +1531,9 @@ literal-by-azimuth-azimuth-dip-dip-a771e67b715f47c2 = на азимут %azimuth
 literal-choose-a-closed-blast-boundary-then-tune-the-grid-the-drill-holes-update-live-in-the-viewport-ef4e0565aaee5cc1 = Выберите замкнутую границу блока, затем настройте сетку. Скважины обновляются в окне просмотра в реальном времени.
 literal-choose-a-valid-closed-polyline-050aaa9e69f682e1 = Выберите допустимую замкнутую полилинию
 literal-choose-the-drillhole-dataset-to-tie-in-first-c2621eec3fab854c = Сначала выберите набор данных скважин для соединения
-literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Кликните замкнутую полилинию, чтобы использовать её как контур блока
+literal-click-a-closed-polyline-to-use-as-the-blast-shape-48375b2f286b7f26 = Щёлкните замкнутую полилинию, чтобы использовать её как контур блока
 literal-esc-cancels-baa1fbafa2ec28c1 = Esc — отмена
-literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Кликните устье, чтобы добавить или изменить точку инициирования
+literal-click-a-collar-to-add-or-edit-an-initiation-point-401e1bda81ec1f3f = Щёлкните устье, чтобы добавить или изменить точку инициирования
 literal-copyright-c-2026-leo-timmins-lucas-timmins-and-the-incline-design-contributors-permission-is-hereby-granted-free-of-charge-to-any-person-obtaining-a-copy-of-this-software-to-deal-in-it-without-restriction-subject-to-the-conditions-of-the-mit-license-incline-design-is-provided-as-is-without-warranty-of-any-kind-express-or-implied-including-but-not-limited-to-the-warranties-of-merchantability-fitness-for-a-particular-purpose-and-noninfringement-c08fba0fc182faeb =
     Copyright (c) 2026 Leo Timmins, Lucas Timmins and the Incline Design contributors. Permission is hereby granted, free of charge, to any person obtaining a copy of this software to deal in it without restriction, subject to the conditions of the MIT License.
     Incline Design is provided "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, including but not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE and NONINFRINGEMENT.
@@ -1538,7 +1564,7 @@ literal-licensed-under-the-mit-license-e67ecfec66e32c34 = Распростран
 literal-mit-license-5f7beefdf37e56f6 = Лицензия MIT
 literal-move-collar-ca10ae79e9e08565 = Переместить устье
 literal-move-design-0523e331ee2010f2 = Переместить объект
-literal-move-over-a-closed-polyline-then-click-it-in-the-viewport-esc-cancels-the-pick-84cc7a238fa58e01 = Наведите указатель на замкнутую полилинию и Кликните её в окне просмотра. Esc отменяет выбор.
+literal-move-over-a-closed-polyline-then-click-it-in-the-viewport-esc-cancels-the-pick-84cc7a238fa58e01 = Наведите указатель на замкнутую полилинию и щёлкните её в окне просмотра. Esc отменяет выбор.
 literal-name-count-holes-ba204a5a8f88bfa7 = %name% · скважин: %count%
 literal-name-of-the-drillhole-dataset-created-in-the-project-c8212dd025bf75da = Имя набора данных скважин, создаваемого в проекте.
 literal-no-holes-fit-inside-this-boundary-at-the-current-burden-and-spacing-94a528176407d375 = При текущем расстоянии между рядами и шаге внутри этой границы не помещается ни одной скважины
@@ -1573,6 +1599,46 @@ literal-update-8b0432eecbd8b034 = Обновить
 literal-vertical-depth-below-each-collar-a088c1170aa8628d = Вертикальная глубина от каждого устья.
 literal-x-offset-cf30a60198d81e4a = Смещение X
 literal-y-offset-ffb673aa94de0fa7 = Смещение Y
+literal-appearance-f0e261e04eda82ff = Внешний вид
+literal-arc-circle-69e83efed2ce9d47 = Дуга и окружность
+literal-arc-segments-f2c50c445ff0606b = Сегменты дуги
+literal-bulge-5911694918e2fe44 = Стрела прогиба
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = По модели данных дуги со стрелой прогиба горизонтальны: дуга изгибается в плане, а высота изменяется по прямой от одной вершины к следующей.
+literal-centre-x-39ad69e3af6db6be = Центр X
+literal-centre-y-39ad6ae3af6db871 = Центр Y
+literal-centre-z-39ad67e3af6db358 = Центр Z
+literal-chord-ebed35dc77f41c35 = Хорда
+literal-circle-14c54ca33d0f3ea9 = Окружность
+literal-colour-by-layer-01a922874fe4bebb = Цвет по слою
+literal-edit-6caa725f12d7e915 = Изменить...
+literal-edit-object-03fd9f47ed01e398 = Изменить объект
+literal-edit-object-142afa7681e533de = Изменить объект...
+literal-edited-kind-017b9d5669af9d78 = Изменён объект %kind%
+literal-edited-kind-count-vertices-4e063a8127567887 = Изменён объект %kind% (вершин: %count%)
+literal-enter-a-number-d9eabfa7b5e91cb3 = Введите число
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = Использовать цвет владеющего слоя вместо цвета, закреплённого за этим объектом.
+literal-identity-94d63573d312fe9b = Тождественное
+literal-insert-after-3b715eafd7214722 = Вставить после
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = Соединяет последнюю вершину снова с первой.
+literal-length-length-m-7002054fb5f4218e = Длина %length% м
+literal-move-down-b233557012dcb328 = Переместить вниз
+literal-move-up-4ea0f21fc2a338a1 = Переместить вверх
+literal-no-changes-to-apply-dfa74d34ff069444 = Нет изменений для применения
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = Редактируемый объект изменился; изменения отменены
+literal-ok-091d3d07b5b3076f = ОК
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = Одно или несколько свойств не являются допустимым числом
+literal-perimeter-length-m-area-area-m-27144223224437a6 = Периметр %length% м, площадь %area% м²
+literal-reverse-3ffcdc5db5e7d0c5 = Обратить
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = Строка %row%: позиция или стрела прогиба не является допустимым числом
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = Выберите один объект проекта для редактирования
+literal-sweep-84b7af08cf834f43 = Развёртка
+literal-text-is-not-a-number-edf6a2881b62a6bb = «%text%» не является числом
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = Этот объект больше не существует в документе
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = Этот объект изменился с момента открытия редактора; откройте его заново, чтобы редактировать текущую версию
+literal-this-object-has-a-single-position-134add52252a573e = У этого объекта одна позиция.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = У этого объекта нет сегментов дуги.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = Этому объекту требуется как минимум %required% вершин
+literal-unassigned-8a49b21a2c9c0022 = Не назначено
 
 color-aci = ACI
 color-aci-value = ACI { $index }
@@ -1582,3 +1648,142 @@ color-opacity = Непрозрачность
 color-edit = Нажмите, чтобы изменить цвет
 color-saturation-value = Насыщенность и яркость
 color-hue = Оттенок
+asset-loading = Загрузка данных ресурса
+asset-unloading = Выгрузка данных ресурса
+asset-load-failed = Не удалось загрузить данные ресурса
+asset-unload-failed = Не удалось выгрузить данные ресурса
+preferences-title = Параметры
+context-text-colour = Цвет текста
+context-polylines = Полилинии
+context-points = Точки
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = Центр вращения освобождён
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = Под курсором нет точки, на которую можно закрепить центр вращения
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = Центр вращения закреплён в точке %x%, %y%, %z%
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = Центр вращения недоступен в режиме полёта
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = Освободить центр вращения
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = Щёлкните точку, чтобы закрепить на ней центр вращения
+literal-fix-centre-of-rotation-1aa51a75d030db2a = Закрепить центр вращения
+literal-centre-of-rotation-5c1f34327183860b = Центр вращения
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = Закрепляет или освобождает центр, вокруг которого вращаются оба вида
+literal-rl-grid-options-2329c7b8001bc333 = Параметры сетки отметок
+literal-automatic-colour-23347fe2c6749180 = Автоматический цвет
+literal-thickness-289be54832e4be75 = Толщина
+literal-px-c2a09a17cdcb2c7f =  пикс.
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Автоматический шаг отметок
+literal-rl-spacing-88a1992aa9332272 = Шаг отметок
+literal-hide-xy-grid-85952898e2cff804 = Скрыть сетку XY
+literal-show-xy-grid-d22a739bae102bb1 = Показать сетку XY
+literal-set-grid-63bc48801d739665 = Задать сетку
+literal-xy-grid-options-04861f560f92a08c = Параметры сетки XY
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Сбросить вид сечения (вписать в границы)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = Сетка XY включена = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Поворот шаблона против часовой стрелки от глобальной оси %axis%.
+literal-axis-offset-d064a568a65d9a1f = Смещение по %axis%
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Сдвигает сетку шаблона вдоль глобальной оси %axis%, сохраняя её обрезку по форме взрыва.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Расстояние сдвига вдоль мировой оси %axis%.
+literal-axis-scale-ratio-851b3aab8b582f09 = Коэффициент масштаба по %axis%
+literal-axis-range-5455776ed8bd0a89 = Диапазон по %axis%
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Наложено на поверхность
+crs-unknown-ellipsoid = Нераспознанная модель Земли «{ $name }» в этом определении системы координат.
+crs-no-ellipsoid = В этом определении системы координат не указана используемая модель Земли.
+crs-unknown-code = EPSG:{ $code } отсутствует в реестре систем координат.
+crs-transform-failed = Не удалось преобразовать координату; результат не является конечной позицией.
+crs-no-datum-path = Опубликованное преобразование между системами отсчёта { $from } и { $to } (датумы EPSG { $source } и { $target }) недоступно. Преобразование в любом случае было бы неверным на неизвестную величину, поэтому ничего не изменено.
+crs-unknown-datum = Систему отсчёта { $from } или { $to } определить невозможно, и они используют разные модели Земли. Преобразование между ними было бы неверным на неизвестную величину.
+ws-survey = Геодезия
+survey-count-designs = { $count } { $count ->
+    [one] проект
+    [few] проекта
+   *[other] проектов
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] триангуляция
+    [few] триангуляции
+   *[other] триангуляций
+  }
+survey-count-models = { $count } { $count ->
+    [one] блочная модель
+    [few] блочные модели
+   *[other] блочных моделей
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] облако точек
+    [few] облака точек
+   *[other] облаков точек
+  }
+survey-count-holes = { $count } { $count ->
+    [one] набор скважин
+    [few] набора скважин
+   *[other] наборов скважин
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] растр
+    [few] растра
+   *[other] растров
+  }
+survey-unsupported = Растры не могут быть преобразованы этим инструментом. Они недоступны для выбора в области просмотра, поэтому ничего из выбранного не затрагивается.
+survey-angle = Поворот вокруг Z (против часовой стрелки)
+survey-scale = Единый масштабный коэффициент XYZ
+survey-invalid-transform = Начала координат, угол и результирующие координаты должны быть конечными.
+survey-invalid-scale = Масштаб должен быть конечным положительным числом с конечной обратной величиной.
+survey-empty-selection = Выберите хотя бы один поддерживаемый элемент для преобразования.
+survey-unavailable = Выбранный элемент отсутствует или не загружен. Загрузите его перед преобразованием.
+survey-wrong-project = Выбирайте проекты только из активного проекта.
+survey-name-required = Введите название системы координат.
+survey-working = Преобразование выбранных данных…
+survey-completed = Преобразовано на месте: { $items }. Отмена восстановит их.
+survey-failed = Ошибка преобразования: { $error }
+survey-stale = Преобразование отменено, так как активный проект или исходные данные изменились. Выберите исходные данные и повторите попытку.
+survey-coordinates-menu = Координаты
+survey-definitions-action = Определения…
+survey-transform-action = Преобразовать…
+survey-definitions-title = Определения координат
+survey-transform-title = Преобразование координат
+survey-new-system = Новая система координат
+survey-new-system-name = Система координат
+survey-set-local = Задать как систему координат рудника
+survey-delete-system = Удалить систему координат
+survey-systems-empty = Нет систем координат
+survey-system-section = Определение сетки рудника
+survey-reference-note = Система отсчёта, относительно которой записано каждое определение: координаты, которые ваши данные уже несут при импорте. У неё нет собственных параметров. Щёлкните правой кнопкой по системе, чтобы сделать её системой координат рудника, или по пустому месту ниже, чтобы определить новую.
+survey-system-name = Название
+survey-reference-system = Система отсчёта
+survey-reference-origin = Известная точка — координаты в системе отсчёта
+survey-system-origin = Та же точка — координаты в системе
+survey-angle-help = Против часовой стрелки от оси X системы отсчёта к оси Y, если смотреть сверху.
+survey-scale-help = Единый масштаб XYZ от системы отсчёта к этой системе. Используйте 1, чтобы сохранить размеры.
+survey-close = Закрыть
+survey-from = Из
+survey-to = В
+survey-transform-button = Преобразовать
+survey-swap = Поменять местами
+survey-drape-note = Наложенные изображения удаляются с преобразованных поверхностей и должны быть наложены заново.
+survey-needs-grid-block-model = Блочная модель — это регулярная сетка ячеек, и смена проекции или системы отсчёта не сохраняет эту регулярность. Преобразование означало бы передискретизацию каждой ячейки в новую сетку с потерей содержащихся в них значений, поэтому модель оставлена без изменений.
+survey-needs-grid-raster = Растр размещается в мире с помощью аффинного отображения, что смена проекции или системы отсчёта сохранить не может. Преобразование означало бы передискретизацию изображения, поэтому растр оставлен без изменений.
+survey-conversion-exact = Точное: только смена сетки, без перепроецирования.
+survey-conversion-accuracy = Заявленная точность { $accuracy } м.
+survey-kind = Тип
+survey-axis-names = Названия осей
+survey-axis-help = Как эта система называет свои оси, если не X, Y и Z — «В», «С», «RL» для сетки рудника. Используется везде, где показываются координаты, но только пока это система координат рудника. Укажите все три названия или ни одного.
+survey-kind-registry-short = Система из реестра
+survey-kind-grid-short = Сетка над другой системой
+survey-registry-search = Поиск
+survey-registry-hint = Название или код EPSG, напр. «mga zone 56»
+survey-registry-none = В реестре нет совпадений по всем словам.
+survey-parent = Определена относительно
+survey-parent-origin = Известная точка — координаты родительской системы
+survey-pick-registry = Найдите систему и выберите её из результатов.
+survey-pick-parent = Выберите систему, относительно которой определена эта сетка.
+survey-pick-system = Выберите систему
+survey-pick-systems = Выберите исходную систему и систему назначения для преобразования.
+survey-no-selection = Выберите систему координат слева или щёлкните правой кнопкой, чтобы добавить новую.
+survey-kind-grid = Сетка над { $parent }
+survey-system-in-use = «{ $name }» нельзя удалить: относительно неё определены { $dependants } { $dependants ->
+    [one] система
+    [few] системы
+   *[other] систем
+  }. Сначала перенаправьте их на другую систему.
+survey-system-cycle = «{ $name }» определена относительно самой себя, напрямую или через свои родительские системы.
+survey-system-missing = Эта система координат больше не существует. Выберите другое определение.
+survey-same-system = Выберите разные исходную систему и систему назначения.
+survey-name-exists = Система координат с таким названием уже существует. Выберите её для редактирования или укажите другое название.

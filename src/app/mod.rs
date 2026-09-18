@@ -275,6 +275,8 @@ pub(crate) struct App<'a> {
     web_event_loop_proxy: Option<EventLoopProxy<AppEvent>>,
     #[cfg(target_arch = "wasm32")]
     browser_saves_pending: HashSet<u32>,
+    /// Counts workspace replacements, which is where runtime ids restart.
+    workspace_generation: u64,
     #[cfg(target_arch = "wasm32")]
     browser_deletes_pending: HashSet<crate::model::project::ProjectId>,
     #[cfg(target_arch = "wasm32")]
@@ -290,6 +292,8 @@ pub(crate) struct App<'a> {
     /// deliberately replaced instead of configuring a swapchain for each one.
     pending_resize: Option<winit::dpi::PhysicalSize<u32>>,
     last_render_time: Option<Instant>,
+    surface_retry_pending: bool,
+    slice_surface_retry_deadline: Option<Instant>,
     last_scroll_instant: Option<Instant>,
     last_snap_poll_instant: Option<Instant>,
     editor: EditorState,
@@ -414,6 +418,7 @@ impl<'a> Default for App<'a> {
             web_event_loop_proxy: None,
             #[cfg(target_arch = "wasm32")]
             browser_saves_pending: HashSet::new(),
+            workspace_generation: 0,
             #[cfg(target_arch = "wasm32")]
             browser_deletes_pending: HashSet::new(),
             #[cfg(target_arch = "wasm32")]
@@ -426,6 +431,8 @@ impl<'a> Default for App<'a> {
             tracked_project_paths: Vec::new(),
             pending_resize: None,
             last_render_time: None,
+            surface_retry_pending: false,
+            slice_surface_retry_deadline: None,
             last_scroll_instant: None,
             last_snap_poll_instant: None,
             editor: EditorState::new(),
@@ -537,6 +544,8 @@ impl<'a> App<'a> {
             MacMenuAction::OpenContourTriangulation => Some(UiCommand::OpenContourTriangulation),
             MacMenuAction::OpenPointCloudTin => Some(UiCommand::OpenPointCloudTin),
             MacMenuAction::OpenCreateBlockModel => Some(UiCommand::OpenCreateBlockModel(None)),
+            MacMenuAction::OpenSurveyDefinitions => Some(UiCommand::OpenSurveyDefinitions),
+            MacMenuAction::OpenSurveyTransform => Some(UiCommand::OpenSurveyTransform),
             MacMenuAction::OpenCreateOreTriangulation => Some(UiCommand::OpenCreateOreTriangulation),
             MacMenuAction::UndrapeAllRasters => Some(UiCommand::UndrapeAllRasters),
             MacMenuAction::ToggleView(index) => crate::mac::VIEW_TOGGLES.get(index).copied().map(UiCommand::ToggleViewOption),
@@ -590,6 +599,19 @@ impl<'a> App<'a> {
         }
         self.editor.workspace_order = order.try_into().expect("all workspaces appear exactly once");
         self.editor.active_workspace = self.editor.workspace_order[0];
+        // A definition naming a parent that is not in the list, or itself,
+        // cannot be resolved and would fail on every use; it is dropped on the
+        // way in so the rest of the list still works.
+        let definitions: Vec<_> = config.coordinate_systems.into_iter().filter(|definition| !definition.name.trim().is_empty()).collect();
+        self.editor.survey.definitions = definitions
+            .iter()
+            .filter(|definition| crate::model::survey::resolve_system(&definition.name, &definitions).is_ok())
+            .cloned()
+            .collect();
+        self.editor.survey.local_system = config
+            .mine_coordinate_system
+            .filter(|name| self.editor.survey.definitions.iter().any(|definition| &definition.name == name));
+        self.refresh_axis_names();
         // The status bar's picker switches this live afterwards; here it just
         // installs what the last session (or the OS locale) left in the config.
         self.editor.language = config.language;
@@ -598,7 +620,6 @@ impl<'a> App<'a> {
         self.editor.show_console = config.show_console;
         self.editor.panel_chrome = config.panel_chrome;
         self.editor.show_world_axis_gizmo = config.show_world_axis_gizmo;
-        self.editor.show_xy_grid = config.show_xy_grid;
         self.editor.show_scale_bar = config.show_scale_bar;
         self.editor.renderer_background_color = config.renderer_background_color;
         self.editor.snap_poll_rate = config.snap_poll_rate.clamp(5, 1000);
@@ -939,6 +960,7 @@ impl<'a> App<'a> {
             SceneEntityId::BlockModel(id) => self.block_models.iter().any(|item| item.id == *id),
             SceneEntityId::DrillHole(id) => self.drill_holes.iter().any(|item| item.id == *id),
             SceneEntityId::PointCloud(id) => self.point_clouds.iter().any(|item| item.id == *id),
+            SceneEntityId::Raster(id) => self.raster_textures.iter().any(|item| item.id == *id),
         };
         let missing: Vec<SceneEntityId> = self
             .editor
@@ -1109,6 +1131,12 @@ impl<'a> App<'a> {
     /// cache before New/Open installs a replacement project. File-dialog
     /// lifecycle code resolves unsaved-work confirmation before calling this.
     fn clear_project_owned_data(&mut self) {
+        // A browser save already holds its own snapshot and still owes the
+        // completion handler a result; cancelling it would strand the pending
+        // flag and lose a save the user asked for.
+        #[cfg(target_arch = "wasm32")]
+        self.cancel_jobs(|key| !matches!(key, jobs::JobKey::BrowserProjectSave { .. }));
+        #[cfg(not(target_arch = "wasm32"))]
         self.cancel_jobs(|_| true);
         for (ticket, _, _, report) in std::mem::take(&mut self.pending_triangulation_loads) {
             self.cancel_background_task(ticket);
@@ -1142,6 +1170,10 @@ impl<'a> App<'a> {
         }
 
         self.workspace = ProjectStore::default();
+        // Runtime ids restart at one here; in-flight work must not follow.
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
+        #[cfg(target_arch = "wasm32")]
+        self.browser_saves_pending.clear();
         self.history = crate::model::History::new();
         self.triangulations.clear();
         self.next_triangulation_id = 0;
@@ -1185,6 +1217,7 @@ impl<'a> App<'a> {
     }
 
     fn clear_editor_transient_state(&mut self) {
+        self.clear_rotation_centre();
         // Resolve document-backed drafts while their source identity is still
         // available. These helpers locate the owning project explicitly, so
         // this is also safe when a newly opened project has already become
@@ -1200,6 +1233,8 @@ impl<'a> App<'a> {
         if self.editor.text_editing_enabled {
             self.cancel_text_edit();
         }
+        // A section's plane and slab are in the coordinates of the project it was cut from, so it is left whenever the active project changes.
+        self.leave_slice_mode();
         self.editor.clear_project_transients();
         self.pending_selection_click = None;
         // Clear any in-progress gesture so it cannot bleed into the new project.
@@ -1225,7 +1260,10 @@ impl<'a> App<'a> {
     /// miss its slot and wait for the next one (144 on a 165 Hz display
     /// presents 82.5 times a second, not 144).
     fn frame_interval(&self) -> Duration {
-        if self.pending_resize.is_some() {
+        if self.surface_retry_pending {
+            // Failed acquisition never reaches present, so vsync cannot pace it.
+            Duration::from_millis(250)
+        } else if self.pending_resize.is_some() {
             rate_interval(self.editor.resize_frame_rate_cap)
         } else if self.editor.vsync_enabled {
             Duration::ZERO
@@ -1437,6 +1475,8 @@ impl<'a> App<'a> {
         self.window = None;
         self.pending_resize = None;
         self.last_render_time = None;
+        self.surface_retry_pending = false;
+        self.slice_surface_retry_deadline = None;
         self.redraw_requested = false;
     }
 
@@ -1929,6 +1969,12 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             self.next_ui_repaint_deadline = None;
             self.redraw_requested = true;
         }
+        if self.slice_surface_retry_deadline.is_some_and(|deadline| deadline <= now) {
+            self.slice_surface_retry_deadline = None;
+            if let Some(graphics) = self.graphics.as_ref() {
+                graphics.request_slice_preview_redraw();
+            }
+        }
         let continuous_redraw = self.graphics.as_ref().is_some_and(Graphics::needs_continuous_redraw);
 
         if (self.redraw_requested || continuous_redraw)
@@ -1953,6 +1999,7 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
         };
+        let wake_deadline = wake_deadline.into_iter().chain(self.slice_surface_retry_deadline).min();
         if let Some(deadline) = wake_deadline {
             event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
@@ -2057,8 +2104,17 @@ impl<'a> ApplicationHandler<AppEvent> for App<'a> {
                 snapshot_hash,
                 snapshot_layer_hashes,
                 asset_token,
+                workspace,
                 result,
             } => {
+                if workspace != self.workspace_generation {
+                    // Its project is gone and the id may be someone else's now,
+                    // so nothing here is ours to clear.
+                    if let Err(error) = result {
+                        userspace_warn!("{}", crate::i18n::tr_format!(literal = "Browser save failed: %error%", error = error));
+                    }
+                    return;
+                }
                 self.browser_saves_pending.remove(&runtime_id);
                 match result {
                     Ok(()) => {
@@ -2175,6 +2231,8 @@ pub(crate) enum AppEvent {
         snapshot_hash: u64,
         snapshot_layer_hashes: std::collections::HashMap<u64, u64>,
         asset_token: crate::model::project::SaveToken,
+        /// Which workspace the snapshot came from; runtime ids are recycled.
+        workspace: u64,
         result: std::result::Result<(), String>,
     },
     BrowserProjectDeleted {

@@ -52,10 +52,6 @@ pub(crate) const fn default_show_world_axis_gizmo() -> bool {
     true
 }
 
-pub(crate) const fn default_show_xy_grid() -> bool {
-    true
-}
-
 pub(crate) const fn default_show_scale_bar() -> bool {
     true
 }
@@ -185,8 +181,6 @@ pub(crate) struct Config {
     pub(crate) frame_counter_enabled: bool,
     #[serde(default = "default_show_world_axis_gizmo")]
     pub(crate) show_world_axis_gizmo: bool,
-    #[serde(default = "default_show_xy_grid")]
-    pub(crate) show_xy_grid: bool,
     /// Show the cartographic distance scale in the viewport.
     #[serde(default = "default_show_scale_bar")]
     pub(crate) show_scale_bar: bool,
@@ -223,6 +217,43 @@ pub(crate) struct Config {
     pub(crate) delay_products: Vec<StoredDelayProduct>,
     #[serde(default)]
     pub(crate) workspace_order: Vec<crate::ui::state::Workspace>,
+    #[serde(default)]
+    #[serde(deserialize_with = "lenient_list")]
+    pub(crate) coordinate_systems: Vec<crate::model::survey::SystemDefinition>,
+    /// Which saved system the project's numbers are in.
+    #[serde(default)]
+    pub(crate) mine_coordinate_system: Option<String>,
+}
+
+/// Deserialize a list, dropping entries this build cannot read instead of
+/// failing the whole file.
+///
+/// A config is one document holding every preference, so a single unreadable
+/// coordinate system must not cost a user their theme, their camera settings
+/// and their delay palette. An entry written by a newer build, or by an older
+/// one whose shape has since changed, is skipped and the rest of the file
+/// loads. The untagged fallback accepts anything, so the element deserializer
+/// cannot itself fail.
+fn lenient_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Entry<T> {
+        Readable(T),
+        Unreadable(serde::de::IgnoredAny),
+    }
+
+    let entries = Vec::<Entry<T>>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Entry::Readable(value) => Some(value),
+            Entry::Unreadable(_) => None,
+        })
+        .collect())
 }
 
 impl Default for Config {
@@ -242,7 +273,6 @@ impl Default for Config {
             downscale_raster_previews: default_downscale_raster_previews(),
             frame_counter_enabled: false,
             show_world_axis_gizmo: default_show_world_axis_gizmo(),
-            show_xy_grid: default_show_xy_grid(),
             show_scale_bar: default_show_scale_bar(),
             debug_chunk_coloring: false,
             debug_clip_planes: false,
@@ -259,6 +289,8 @@ impl Default for Config {
             fly_max_clip_span: default_fly_max_clip_span(),
             delay_products: default_delay_products(),
             workspace_order: crate::ui::state::Workspace::ALL.to_vec(),
+            coordinate_systems: Vec::new(),
+            mine_coordinate_system: None,
         }
     }
 }

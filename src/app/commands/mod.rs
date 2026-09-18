@@ -3,6 +3,7 @@ pub(crate) mod drawing; // Handles finishing polylines, creating points, etc com
 pub(crate) mod drill_hole;
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
+pub(crate) mod object_edit; // Handles the "Edit Object" dialog's working-copy writeback.
 pub(crate) mod omf; // Whole-project Open Mining Format interchange.
 pub(crate) mod plot; // Handles printable plot sheets
 pub(crate) mod point_cloud; // Handles importing/loading point clouds, etc. commands
@@ -13,6 +14,7 @@ pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod residency;
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
+mod survey; // Handles saved mine grids and transformations of project data.
 pub(crate) mod text; // Handles text editing commands
 pub(crate) mod triangulation; // Handles loading meshes, deleting meshes, etc. commands
 pub(crate) mod view; /* Handles resetting camera view, , etc. commands */
@@ -97,7 +99,8 @@ impl<'a> App<'a> {
     pub(crate) fn handle_ui_command(&mut self, command: UiCommand) -> Result<()> {
         let requires_project = matches!(
             &command,
-            UiCommand::ImportOmfPaths(_)
+            UiCommand::TransformSurveySelection
+                | UiCommand::ImportOmfPaths(_)
                 | UiCommand::ImportDxfPathsInto(_)
                 | UiCommand::ImportTriangulationPaths(_)
                 | UiCommand::ImportPointCloudPaths(_)
@@ -305,6 +308,7 @@ impl<'a> App<'a> {
                 self.hide_selected_elements();
                 Ok(())
             }
+            #[cfg(not(target_arch = "wasm32"))]
             UiCommand::RequestExit => self.request_exit(),
             UiCommand::SaveAndExit => self.save_and_exit(),
             UiCommand::ExitWithoutSaving => {
@@ -592,11 +596,21 @@ impl<'a> App<'a> {
                 self.cancel_relimit();
                 Ok(())
             }
-            UiCommand::ResetView => {
-                self.set_slice_mode_enabled(false);
-                self.reset_view();
+            UiCommand::ToggleRotationCentre => {
+                self.toggle_rotation_centre();
                 Ok(())
             }
+            UiCommand::ResetView => {
+                // Sliced, the section is the view: squaring up to it and
+                // fitting is the reset, rather than dropping the mode.
+                if self.editor.slice_mode_enabled {
+                    self.reset_slice_view();
+                } else {
+                    self.reset_view();
+                }
+                Ok(())
+            }
+            UiCommand::SetGridShown(shown) => self.set_grid_shown(shown),
             UiCommand::SetTopologyWireframes(enabled) => self.set_topology_wireframes(enabled),
             #[cfg(not(target_arch = "wasm32"))]
             UiCommand::SetSlicePreviewDetached(detached) => {
@@ -613,18 +627,72 @@ impl<'a> App<'a> {
             }
             UiCommand::SetShowPoints(enabled) => self.set_show_points(enabled),
             UiCommand::SetStandardView(view) => {
-                // The slice camera is derived from the slice state each frame;
-                // a standard-view transition would silently queue and fire on
-                // exit, so ignore it while sliced.
-                if self.editor.slice_mode_enabled {
-                    return Ok(());
-                }
+                // The slice camera is derived from the slice state each frame,
+                // so a standard-view transition would silently queue and fire
+                // on exit; sliced, the section turns to face the view instead.
+                let sliced = self.editor.slice_mode_enabled;
                 if let Some(graphics) = self.graphics.as_mut() {
-                    graphics.set_standard_view(view);
+                    if sliced {
+                        graphics.set_slice_standard_view(view);
+                    } else {
+                        graphics.set_standard_view(view);
+                    }
                     self.redraw_requested = true;
+                }
+                if sliced {
+                    // No mouse event behind this camera swap; ending any orbit lets the cursor land back on the section.
+                    self.end_right_orbit();
                 }
                 Ok(())
             }
+            UiCommand::OpenSurveyDefinitions => {
+                self.editor.survey.transform_open = false;
+                self.editor.survey.definitions_open = true;
+                let name = self.editor.survey.editing_name.clone();
+                self.editor.survey.edit_definition(name);
+                Ok(())
+            }
+            UiCommand::OpenSurveyTransform => {
+                self.editor.survey.open_transform();
+                Ok(())
+            }
+            UiCommand::SaveSurveyDefinition { target, definition } => {
+                let result = self.save_survey_definition(target, definition);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::DeleteSurveyDefinition(name) => {
+                let result = self.delete_survey_definition(&name);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::SelectRaster(id) => {
+                let handle = crate::model::SceneEntityId::Raster(id);
+                // Plain clicks replace the selection, as they do in the
+                // viewport; clicking the selected row again drops it.
+                if self.editor.selected_handles.contains(&handle) {
+                    self.editor.selected_handles.remove(&handle);
+                } else if self.modifiers.shift_key() || self.modifiers.control_key() {
+                    self.editor.selected_handles.insert(handle);
+                } else {
+                    self.editor.selected_handles.clear();
+                    self.editor.selected_handles.insert(handle);
+                }
+                self.invalidate_geometry();
+                Ok(())
+            }
+            UiCommand::SetSurveyLocalSystem(system) => {
+                let result = self.set_survey_local_system(system);
+                if let Err(error) = &result {
+                    self.editor.survey.definition_message = Some(error.to_string());
+                }
+                result
+            }
+            UiCommand::TransformSurveySelection => self.transform_survey_selection(),
             UiCommand::ReorderWorkspace { workspace, before } => {
                 let mut order = self.editor.workspace_order.to_vec();
                 if before != Some(workspace) {
@@ -637,6 +705,8 @@ impl<'a> App<'a> {
                             &self.editor.current_preferences(),
                             order,
                             self.editor.delay_products.iter().map(crate::ui::state::DelayProduct::to_stored).collect(),
+                            self.editor.survey.definitions.clone(),
+                            self.editor.survey.local_system.clone(),
                         );
                         crate::app::io::save_config(&config)?;
                         self.editor.workspace_order = order;
@@ -708,7 +778,7 @@ impl<'a> App<'a> {
                 Ok(())
             }
             UiCommand::ZoomToExtents => {
-                self.set_slice_mode_enabled(false);
+                // Sliced, the fit happens within the section, which therefore stays up.
                 self.zoom_to_extents();
                 Ok(())
             }
@@ -777,6 +847,14 @@ impl<'a> App<'a> {
             }
             UiCommand::OpenInsertPointAtElevationDialog => {
                 self.open_insert_point_at_elevation_dialog();
+                Ok(())
+            }
+            UiCommand::OpenObjectEditDialog(id) => {
+                self.open_object_edit_dialog(id);
+                Ok(())
+            }
+            UiCommand::ApplyObjectEdit { id, object, close } => {
+                self.apply_object_edit(id, *object, close);
                 Ok(())
             }
             UiCommand::InsertPointsAtElevation { object_ids, elevation } => {

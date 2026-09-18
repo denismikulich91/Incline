@@ -68,6 +68,7 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
             SceneEntityId::BlockModel(_) => (tr!(literal = "Block Model"), false),
             SceneEntityId::DrillHole(_) => (tr!(literal = "Drill Hole"), false),
             SceneEntityId::PointCloud(_) => (tr!(literal = "Point Cloud"), false),
+            SceneEntityId::Raster(_) => (tr!(literal = "Raster"), false),
         };
         match kind.as_ref() {
             None => kind = Some((label, is_object)),
@@ -86,9 +87,8 @@ fn canvas_context_menu_title(editor: &EditorState, document: &Document) -> Strin
 
 /// Draw the canvas right-click context menu for selected objects and triangulations.
 ///
-/// Actions only: an object's own values (colour, shape, fill, line weight) are
-/// edited in the explorer's Design properties tab. Updates `geometry_dirty`
-/// when changes are made.
+/// Groups design appearance and editing controls before shared selection actions.
+/// Updates `geometry_dirty` when changes are made.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_right_click_context(
     ui: &mut egui::Ui,
@@ -422,6 +422,7 @@ pub(crate) fn draw_select_project_dialog(ui: &mut egui::Ui, project: &UiProjectV
                             }
                             // Escape dismisses the splash rather than firing
                             // this row: leaving is a deliberate click only.
+                            #[cfg(not(target_arch = "wasm32"))]
                             if select_project_action_row(
                                 ui,
                                 egui::Image::new(themed_icon!(ui, "close_project.svg")),
@@ -1161,15 +1162,24 @@ pub(crate) fn draw_move_panel(ui: &mut egui::Ui, editor: &mut EditorState, comma
     };
     ViewportDockPanel::new("move_panel", title, viewport_rect).min_width(210.0).show(ui.ctx(), |ui| {
         let dx_resp = MenuFieldF64::new(tr!(literal = "dX"), &mut editor.move_panel_delta[0], f64::MIN..=f64::MAX)
-            .help_text(tr!(literal = "Translation distance along the world X axis."))
+            .help_text(tr_format!(
+                literal = "Translation distance along the world %axis% axis.",
+                axis = crate::model::survey::axis_name(0)
+            ))
             .speed(0.1)
             .show(ui);
         let dy_resp = MenuFieldF64::new(tr!(literal = "dY"), &mut editor.move_panel_delta[1], f64::MIN..=f64::MAX)
-            .help_text(tr!(literal = "Translation distance along the world Y axis."))
+            .help_text(tr_format!(
+                literal = "Translation distance along the world %axis% axis.",
+                axis = crate::model::survey::axis_name(1)
+            ))
             .speed(0.1)
             .show(ui);
         let dz_resp = MenuFieldF64::new(tr!(literal = "dZ"), &mut editor.move_panel_delta[2], f64::MIN..=f64::MAX)
-            .help_text(tr!(literal = "Translation distance along the world Z axis."))
+            .help_text(tr_format!(
+                literal = "Translation distance along the world %axis% axis.",
+                axis = crate::model::survey::axis_name(2)
+            ))
             .speed(0.1)
             .show(ui);
         if dx_resp.changed() || dy_resp.changed() || dz_resp.changed() {
@@ -1381,7 +1391,7 @@ pub(crate) fn draw_bezier_panel(ui: &mut egui::Ui, editor: &mut EditorState, com
         });
 }
 
-/// Slice view dock: slab width, movement speed, Q/E rotate rate, and Exit.
+/// Slice view dock: slab width, movement speed, Q/E rotate rate, reset, and exit.
 pub(crate) fn draw_slice_panel(ui: &mut egui::Ui, editor: &mut EditorState, commands: &mut Vec<UiCommand>, viewport_rect: egui::Rect) {
     ViewportDockPanel::new("slice_panel", tr!(literal = "Slice View"), viewport_rect)
         .min_width(210.0)

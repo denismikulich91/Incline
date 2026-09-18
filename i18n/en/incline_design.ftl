@@ -335,6 +335,12 @@ literal-exit-application-206c61fdca9522f7 = Exit Application
 literal-exit-incline-design-b11cdc542f0e84ef = Exit Incline Design
 literal-exit-without-saving-1c85d135e24c5e81 = Exit Without Saving
 literal-exit-slice-ec67c9da3a320e5f = Exit slice
+literal-set-section-grid-0317412c52213ca8 = Set Section Grid
+literal-hide-rl-grid-5777afd90dcfdfef = Hide RL Grid
+literal-show-rl-grid-87a5e28c30f9ca36 = Show RL Grid
+literal-e-08faea07b5959400 = E
+literal-n-09208c07b5b5c383 = N
+literal-set-section-grid-enabled-4477cb755937abe4 = Set section grid = %enabled%
 literal-export-293aa6a6446fb153 = Export
 literal-export-block-model-csv-3755a5af2dbb71af = Export Block Model CSV
 literal-export-csv-block-model-5c2ba2182ac51797 = Export CSV Block Model
@@ -808,6 +814,7 @@ literal-undraped-rasters-from-count-triangulation-s-88d23c9b4a346140 = Undraped 
 literal-that-item-no-longer-belongs-to-the-active-project-698d0f54cdcacf3a = That item no longer belongs to the active project
 literal-renamed-before-to-name-88160afa8287cd38 = Renamed '%before%' to '%name%'
 literal-exited-slice-view-0d1f935a85f65cd3 = Exited slice view
+literal-reset-the-section-view-a90255a33a618651 = Reset the section view
 literal-updated-text-on-object-object-id-a685d5c8e03d0a20 = Updated text on object %object_id%
 literal-finished-text-edit-for-object-object-id-209a1ba447d7f977 = Finished text edit for object %object_id%
 literal-contour-generation-failed-error-60e87eda1ee29afa = Contour generation failed: %error%
@@ -1132,6 +1139,8 @@ literal-disable-flying-mode-3da4ac8dfee8af7d = Disable Flying Mode
 literal-enable-flying-mode-5be056d1b9bdd218 = Enable Flying Mode
 literal-exit-slice-view-8f48e630d38a6390 = Exit Slice View
 literal-vertical-slice-view-a721497b5e8007fa = Vertical Slice View
+literal-reset-section-view-569ba01ea5ad8448 = Reset Section View
+literal-camera-square-to-the-section-095beff203b315a6 = Camera square to the section
 literal-hide-wireframes-a0bb1a91dde72948 = Hide Wireframes
 literal-show-wireframes-7e8dc68f7023441b = Show Wireframes
 literal-hide-points-6ec095fdf7ed73f4 = Hide Points
@@ -1143,7 +1152,9 @@ literal-value-dip-1a0edf99f1cb897b = %value%° dip
 literal-strike-strike-dip-3cbc18ac238a6a85 = %strike%° strike · %dip%
 literal-dip-horizontal-no-strike-4943c4fa9e0cdc26 = %dip% (horizontal, no strike)
 literal-slice-view-531d1a0f0f256066 = Slice view
-literal-middle-drag-pan-w-s-move-slab-q-e-rotate-esc-exit-e11e236e308db73c = middle-drag pan · W/S move slab · Q/E rotate · Esc exit
+slice-viewport-gestures = middle-drag pan · right-drag orbit · Shift+wheel walk · W/S move slab · Q/E rotate · Esc exit
+literal-tool-not-available-in-the-section-view-de04b1de4084eb24 = %tool% - not available in the section view
+literal-that-tool-is-not-available-in-the-section-view-1860484922c748a4 = That tool is not available in the section view
 literal-north-ca6a42d80c5dd964 = North
 literal-south-25b5d0c70a3936da = South
 literal-west-683e16021b85c80e = West
@@ -1579,6 +1590,48 @@ literal-vertical-depth-below-each-collar-a088c1170aa8628d = Vertical depth below
 literal-x-offset-cf30a60198d81e4a = X offset
 literal-y-offset-ffb673aa94de0fa7 = Y offset
 
+## Edit Object dialog
+literal-appearance-f0e261e04eda82ff = Appearance
+literal-arc-circle-69e83efed2ce9d47 = Arc & Circle
+literal-arc-segments-f2c50c445ff0606b = Arc segments
+literal-bulge-5911694918e2fe44 = Bulge
+literal-bulge-arcs-are-horizontal-by-data-model-the-arc-turns-in-plan-and-the-elevation-runs-straight-from-one-vertex-to-the-next-22ec5c6aa778ccd0 = Bulge arcs are horizontal by data model: the arc turns in plan and the elevation runs straight from one vertex to the next.
+literal-centre-x-39ad69e3af6db6be = Centre X
+literal-centre-y-39ad6ae3af6db871 = Centre Y
+literal-centre-z-39ad67e3af6db358 = Centre Z
+literal-chord-ebed35dc77f41c35 = Chord
+literal-circle-14c54ca33d0f3ea9 = Circle
+literal-colour-by-layer-01a922874fe4bebb = Colour by layer
+literal-edit-6caa725f12d7e915 = Edit...
+literal-edit-object-03fd9f47ed01e398 = Edit Object
+literal-edit-object-142afa7681e533de = Edit Object...
+literal-edited-kind-017b9d5669af9d78 = Edited %kind%
+literal-edited-kind-count-vertices-4e063a8127567887 = Edited %kind% (%count% vertices)
+literal-enter-a-number-d9eabfa7b5e91cb3 = Enter a number
+literal-follow-the-owning-layer-s-colour-instead-of-a-colour-pinned-to-this-object-1413087732dbc248 = Follow the owning layer's colour instead of a colour pinned to this object.
+literal-identity-94d63573d312fe9b = Identity
+literal-insert-after-3b715eafd7214722 = Insert after
+literal-join-the-last-vertex-back-to-the-first-3635c0cc34070e69 = Join the last vertex back to the first.
+literal-length-length-m-7002054fb5f4218e = Length %length% m
+literal-move-down-b233557012dcb328 = Move down
+literal-move-up-4ea0f21fc2a338a1 = Move up
+literal-no-changes-to-apply-dfa74d34ff069444 = No changes to apply
+literal-object-edit-target-changed-discarding-the-edit-62f7fae8d8710c9f = Object edit target changed; discarding the edit
+literal-ok-091d3d07b5b3076f = OK
+literal-one-or-more-properties-is-not-a-valid-number-1ad65b850a04208f = One or more properties is not a valid number
+literal-perimeter-length-m-area-area-m-27144223224437a6 = Perimeter %length% m, area %area% m²
+literal-reverse-3ffcdc5db5e7d0c5 = Reverse
+literal-row-row-position-or-bulge-is-not-a-valid-number-4f59b2eac03e6e65 = Row %row%: position or bulge is not a valid number
+literal-select-a-single-design-object-to-edit-a85b14c2f732438c = Select a single design object to edit
+literal-sweep-84b7af08cf834f43 = Sweep
+literal-text-is-not-a-number-edf6a2881b62a6bb = "%text%" is not a number
+literal-that-object-no-longer-exists-in-the-document-584b54b358705058 = That object no longer exists in the document
+literal-this-object-changed-since-the-editor-opened-reopen-it-to-edit-the-current-version-3ddb2e2b0a1df047 = This object changed since the editor opened; reopen it to edit the current version
+literal-this-object-has-a-single-position-134add52252a573e = This object has a single position.
+literal-this-object-has-no-arc-segments-be5e8d30b3b5b1b7 = This object has no arc segments.
+literal-this-object-needs-at-least-required-vertices-ffc1af525a1910cb = This object needs at least %required% vertices
+literal-unassigned-8a49b21a2c9c0022 = Unassigned
+
 color-aci = ACI
 color-aci-value = ACI { $index }
 color-index = Index
@@ -1599,3 +1652,133 @@ context-text-colour = Text colour
 
 context-polylines = Polylines
 context-points = Points
+
+literal-released-the-centre-of-rotation-8f87546075f6c2b5 = Released the centre of rotation
+literal-no-point-under-the-cursor-to-fix-the-centre-of-rotation-on-de16a49b74541b35 = No point under the cursor to fix the centre of rotation on
+literal-fixed-the-centre-of-rotation-at-x-y-z-a370badedf582158 = Fixed the centre of rotation at %x%, %y%, %z%
+literal-the-centre-of-rotation-is-not-available-in-flying-mode-f06c2f6f4d29c721 = The centre of rotation is not available in flying mode
+literal-release-centre-of-rotation-deca2ecfa5c1aeb0 = Release Centre of Rotation
+literal-click-a-point-to-fix-the-centre-of-rotation-4d1e0df9b514fdf3 = Click a point to fix the centre of rotation
+literal-fix-centre-of-rotation-1aa51a75d030db2a = Fix Centre of Rotation
+literal-centre-of-rotation-5c1f34327183860b = Centre of Rotation
+literal-fix-or-release-the-centre-both-views-orbit-about-5555944231e5e32e = Fix or release the centre both views orbit about
+literal-rl-grid-options-2329c7b8001bc333 = RL Grid Options
+literal-automatic-colour-23347fe2c6749180 = Automatic colour
+literal-thickness-289be54832e4be75 = Thickness
+literal-px-c2a09a17cdcb2c7f =  px
+literal-automatic-rl-spacing-d6b8cc64fb3ad8db = Automatic RL spacing
+literal-rl-spacing-88a1992aa9332272 = RL spacing
+literal-hide-xy-grid-85952898e2cff804 = Hide XY Grid
+literal-show-xy-grid-d22a739bae102bb1 = Show XY Grid
+literal-set-grid-63bc48801d739665 = Set Grid
+literal-xy-grid-options-04861f560f92a08c = XY Grid Options
+
+literal-reset-the-section-view-fit-to-extents-932989836837bd0b = Reset the section view (fit to extents)
+literal-set-xy-grid-enabled-eb75e883c0af8dbe = Set XY grid = %enabled%
+literal-counter-clockwise-pattern-rotation-from-the-global-axis-axis-1d9ac426c25a52ee = Counter-clockwise pattern rotation from the global %axis% axis.
+literal-axis-offset-d064a568a65d9a1f = %axis% offset
+literal-shift-the-pattern-grid-along-the-global-axis-axis-while-keeping-it-clipped-to-the-blast-shape-2ed58036824f1a1a = Shift the pattern grid along the global %axis% axis while keeping it clipped to the blast shape.
+literal-translation-distance-along-the-world-axis-axis-97f818cd07d01aff = Translation distance along the world %axis% axis.
+literal-axis-scale-ratio-851b3aab8b582f09 = %axis% scale ratio
+literal-axis-range-5455776ed8bd0a89 = %axis% range
+literal-draped-over-a-surface-c9e6354ebfe9dfbb = Draped over a surface
+
+# Coordinate systems
+crs-unknown-ellipsoid = Unrecognised earth model "{ $name }" in this coordinate system definition.
+crs-no-ellipsoid = This coordinate system definition does not say what earth model it uses.
+crs-unknown-code = EPSG:{ $code } is not in the coordinate system registry.
+crs-transform-failed = A coordinate could not be converted; the result was not a finite position.
+crs-no-datum-path = No published transformation is available between the reference frames of { $from } and { $to } (EPSG datums { $source } and { $target }). Converting anyway would be wrong by an unknown amount, so nothing was changed.
+crs-unknown-datum = The reference frame of { $from } or { $to } cannot be identified, and the two use different earth models. Converting between them would be wrong by an unknown amount.
+
+# Survey workspace
+ws-survey = Survey
+survey-count-designs = { $count } { $count ->
+    [one] design
+   *[other] designs
+  }
+survey-count-meshes = { $count } { $count ->
+    [one] triangulation
+   *[other] triangulations
+  }
+survey-count-models = { $count } { $count ->
+    [one] block model
+   *[other] block models
+  }
+survey-count-clouds = { $count } { $count ->
+    [one] point cloud
+   *[other] point clouds
+  }
+survey-count-holes = { $count } { $count ->
+    [one] drillhole dataset
+   *[other] drillhole datasets
+  }
+survey-count-rasters = { $count } { $count ->
+    [one] raster
+   *[other] rasters
+  }
+survey-unsupported = Rasters cannot be converted by this transform. They are not selectable in the viewport, so nothing in a selection reaches this.
+survey-angle = Rotation about Z (counterclockwise)
+survey-scale = Uniform XYZ scale factor
+survey-invalid-transform = Origins, angle and resulting coordinates must be finite.
+survey-invalid-scale = Scale must be a finite positive number with a finite reciprocal.
+survey-empty-selection = Select at least one supported item to transform.
+survey-unavailable = A selected item is missing or unloaded. Load it before transforming.
+survey-wrong-project = Select designs from the active project only.
+survey-name-required = Enter a coordinate system name.
+survey-working = Transforming selected data…
+survey-completed = Converted { $items } in place. Undo restores them.
+survey-failed = Transformation failed: { $error }
+survey-stale = Transformation discarded because the active project or source data changed. Select the source data and try again.
+survey-coordinates-menu = Coordinates
+survey-definitions-action = Definitions…
+survey-transform-action = Transform…
+survey-definitions-title = Coordinate Definitions
+survey-transform-title = Transform Coordinates
+survey-new-system = New Coordinate System
+survey-new-system-name = Coordinate system
+survey-set-local = Set as Mine Coordinate System
+survey-delete-system = Delete Coordinate System
+survey-systems-empty = No coordinate systems
+survey-system-section = Mine grid definition
+survey-reference-note = The frame every definition is written against: the coordinates your data already carries when it is imported. It has no parameters of its own. Right-click a system to make it the mine coordinate system, or the empty space below to define one.
+survey-system-name = Name
+survey-reference-system = Reference system
+survey-reference-origin = Known point — reference coordinates
+survey-system-origin = Same point — system coordinates
+survey-angle-help = Counterclockwise from reference X toward reference Y, viewed from above.
+survey-scale-help = Uniform XYZ scale from the reference frame to this system. Use 1 to preserve dimensions.
+survey-close = Close
+survey-from = From
+survey-to = To
+survey-transform-button = Transform
+survey-swap = Swap
+survey-drape-note = Draped imagery is dropped from converted surfaces and must be re-draped.
+survey-needs-grid-block-model = A block model is a regular grid of cells, and a change of projection or reference frame does not keep it regular. Converting it would mean resampling every cell into a new grid and losing the values it carries, so it was left alone.
+survey-needs-grid-raster = A raster is placed by an affine map onto the world, which a change of projection or reference frame cannot preserve. Converting it would mean resampling the image, so it was left alone.
+survey-conversion-exact = Exact: grid change only, no reprojection.
+survey-conversion-accuracy = Stated accuracy { $accuracy } m.
+survey-kind = Kind
+survey-axis-names = Axis names
+survey-axis-help = What this system calls its axes, if not X, Y and Z — "E", "N", "RL" for a mine grid. Used everywhere coordinates are shown, but only while this is the mine coordinate system. Name all three or none.
+survey-kind-registry-short = Registry system
+survey-kind-grid-short = Grid over another system
+survey-registry-search = Search
+survey-registry-hint = Name or EPSG code, e.g. "mga zone 56"
+survey-registry-none = Nothing in the registry matches every word.
+survey-parent = Defined against
+survey-parent-origin = Known point — parent coordinates
+survey-pick-registry = Search for the system and choose it from the results.
+survey-pick-parent = Choose the system this grid is defined against.
+survey-pick-system = Choose a system
+survey-pick-systems = Choose the system to convert from and the one to convert to.
+survey-no-selection = Choose a coordinate system on the left, or right-click to add one.
+survey-kind-grid = Grid over { $parent }
+survey-system-in-use = "{ $name }" cannot be deleted: { $dependants } { $dependants ->
+    [one] is
+   *[other] are
+  } defined against it. Point them elsewhere first.
+survey-system-cycle = "{ $name }" is defined against itself, directly or through its parents.
+survey-system-missing = That coordinate system no longer exists. Select another definition.
+survey-same-system = Choose different source and destination systems.
+survey-name-exists = A coordinate system with that name already exists. Select it to edit, or choose another name.
