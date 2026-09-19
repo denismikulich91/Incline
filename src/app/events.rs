@@ -51,6 +51,33 @@ impl<'a> App<'a> {
         if self.window.as_ref().map(|window| window.id()) != Some(window_id) {
             return;
         }
+        // Only viewport-owned fingers are navigation-only. UI contacts must
+        // reach egui for buttons, menus, sliders and scrolling.
+        if let WindowEvent::Touch(touch) = &event {
+            let navigation = self.graphics.as_mut().and_then(|graphics| graphics.touch_input(touch));
+            if navigation == Some(true) {
+                self.refresh_snap_index();
+                if let Some(graphics) = self.graphics.as_mut() {
+                    graphics.begin_orbit_at_surface(
+                        &self.triangulations,
+                        &self.drill_holes,
+                        &self.editor.hidden_handles,
+                        &self.editor.frozen_handles,
+                        &self.scene_document,
+                        &self.snap_index,
+                        self.editor.z_level,
+                        None,
+                        self.editor.xray_enabled,
+                    );
+                }
+            } else if navigation.is_none()
+                && let Some(graphics) = self.graphics.as_mut()
+            {
+                let _ = graphics.gui_input(&event);
+            }
+            self.redraw_requested = true;
+            return;
+        }
         if let WindowEvent::ModifiersChanged(modifiers) = &event {
             self.modifiers = modifiers.state();
         }
@@ -169,6 +196,7 @@ impl<'a> App<'a> {
                 WindowEvent::KeyboardInput { .. } => self.handle_key_action(&event),
                 WindowEvent::Resized(physical_size) if physical_size.width > 0 && physical_size.height > 0 => {
                     self.pending_resize = Some(physical_size);
+                    self.last_resize_event = Some(Instant::now());
                     self.redraw_requested = true;
                 }
                 WindowEvent::RedrawRequested => {
@@ -210,7 +238,7 @@ impl<'a> App<'a> {
                     #[cfg(target_os = "macos")]
                     crate::mac::sync_menu_state(&self.editor, &project);
                     let completing_topology_load = self.topology_uploads_pending();
-                    let applied_resize = self.pending_resize.take();
+                    let applied_resize = self.take_resize_to_apply(now);
                     let mut slice_moving = false;
                     if let Some(graphics) = self.graphics.as_mut() {
                         if let Some(size) = applied_resize {

@@ -51,6 +51,7 @@ pub(crate) mod projections;
 pub(crate) mod screenshot;
 pub(crate) mod slice_preview;
 pub(crate) mod targets;
+mod touch;
 
 pub(super) const TEXT_CACHE_TRIM_INTERVAL_FRAMES: u64 = 300;
 pub(super) const MSAA_SAMPLE_COUNT: u32 = 4;
@@ -129,10 +130,26 @@ pub(crate) enum RenderSurfaceError {
 /// to the swapchain and paint fresh egui shapes over it, avoiding another
 /// block-model volume raycast.
 pub(super) struct SceneCacheTarget {
+    pub(super) texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
     /// The cache bound for reading, for the blit that restores it into the
     /// multisample target at the start of an overlay-only frame.
     pub(super) bind_group: wgpu::BindGroup,
+}
+
+/// Full-screen attachments a resize replaced. WebGPU frees a texture's memory
+/// when it is destroyed or collected, and leaving it to the browser's garbage
+/// collector lets a fast drag-resize pile up dozens of full-screen MSAA and
+/// depth images - enough to exhaust GPU memory. They cannot be destroyed the
+/// moment they are replaced either: the frames that drew into them are
+/// submitted but may still be executing, and destroying a texture out from
+/// under work in flight invalidates that work. Holding them for a few
+/// presented frames outlasts anything still queued.
+pub(super) struct RetiredAttachments {
+    pub(super) retired_at_frame: u64,
+    pub(super) retired_at: Instant,
+    pub(super) textures: Vec<wgpu::Texture>,
+    pub(super) buffers: Vec<wgpu::Buffer>,
 }
 
 /// Per-frame style and placement for the viewport's procedural world XY grid.
@@ -394,9 +411,12 @@ pub(crate) struct Graphics<'a> {
     pub(super) fly_camera_controller: FlyCameraController,
     pub(super) projection: Projection,
     pub(super) mouse_pressed: Option<MouseButton>,
+    touch_gesture: touch::TouchGesture,
     pub(super) fly_mode_enabled: bool,
     pub(super) slice_view: Option<SliceViewState>,
     pub(super) frame_index: u64,
+    /// Attachments awaiting destruction; see `RetiredAttachments`.
+    pub(super) retired_attachments: Vec<RetiredAttachments>,
     /// Last frame on which the shaped-text cache was trimmed. Tracking the
     /// elapsed interval avoids requiring a geometry rebuild to land on one
     /// exact multiple of the trim cadence.
@@ -832,6 +852,7 @@ impl<'a> Graphics<'a> {
 
     pub(crate) fn release_mouse_capture(&mut self) {
         self.mouse_pressed = None;
+        self.touch_gesture = Default::default();
         self.camera_controller.end_orbit();
         self.orbit_marker = None;
         self.fly_camera_controller.clear_input();
@@ -883,12 +904,16 @@ impl<'a> Graphics<'a> {
     /// (right-mouse drag). Callers can skip expensive per-frame work like snap
     /// queries during camera movement.
     pub(crate) fn is_camera_active(&self) -> bool {
-        self.mouse_pressed == Some(MouseButton::Right)
+        self.mouse_pressed == Some(MouseButton::Right) || !self.touch_gesture.contacts.is_empty()
     }
 
     /// Record that the user is interacting with the view right now (camera
     /// drag or window resize), starting the volume raycaster's low-quality
     /// cooldown.
+    pub(crate) fn surface_size(&self) -> winit::dpi::PhysicalSize<u32> {
+        self.size
+    }
+
     pub(super) fn mark_interaction(&mut self) {
         self.last_interaction = Some(Instant::now());
     }
@@ -1116,6 +1141,29 @@ impl<'a> Graphics<'a> {
     /// egui hid or showed would be skipped as a no-op.
     fn sync_cursor_grab(&self) {
         let fly_active = self.fly_mode_enabled && self.mouse_pressed == Some(MouseButton::Right);
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowExtWebSys;
+
+            let Some(canvas) = self.window.canvas() else { return };
+            let Some(document) = canvas.owner_document() else { return };
+            let has_method = |object: &wasm_bindgen::JsValue, name: &str| js_sys::Reflect::get(object, &name.into()).is_ok_and(|value| value.is_function());
+            // winit 0.30 calls these APIs without feature detection or exception
+            // handling. Mobile browsers can omit them, so even releasing an
+            // unused grab on focus loss (e.g. a file picker) would throw into JS.
+            if !has_method(document.as_ref(), "exitPointerLock") {
+                return;
+            }
+            let canvas_element: &web_sys::Element = canvas.as_ref();
+            let owns_lock = document.pointer_lock_element().as_ref() == Some(canvas_element);
+            if fly_active {
+                if owns_lock || !has_method(canvas.as_ref(), "requestPointerLock") {
+                    return;
+                }
+            } else if !owns_lock {
+                return;
+            }
+        }
         if fly_active {
             if self.window.set_cursor_grab(CursorGrabMode::Locked).is_err() {
                 let _ = self.window.set_cursor_grab(CursorGrabMode::Confined);

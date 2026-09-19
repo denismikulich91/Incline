@@ -7,6 +7,7 @@ pub(crate) mod chrome;
 pub(crate) mod dialogs;
 pub(crate) mod elements;
 pub(crate) mod fonts;
+mod scaling;
 pub(crate) mod state;
 pub(crate) mod widgets;
 
@@ -58,13 +59,28 @@ pub(crate) struct Gui {
     ctx: egui::Context,
     state: egui_winit::State,
     renderer: egui_wgpu::Renderer,
+    last_cursor_event: Option<WindowEvent>,
     #[cfg(target_arch = "wasm32")]
     pending_pastes: Vec<String>,
+}
+
+/// The layout rect covering `screen_size` physical pixels, expressed in the
+/// point space `window_rect` implies. `None` when there is nothing to scale
+/// from, in which case egui's own window-sized rect stands.
+fn surface_screen_rect(window_rect: egui::Rect, window_width: u32, screen_size: [u32; 2]) -> Option<egui::Rect> {
+    (window_rect.width() > 0.0 && window_width > 0).then(|| {
+        let points_per_pixel = window_rect.width() / window_width as f32;
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(screen_size[0] as f32, screen_size[1] as f32) * points_per_pixel)
+    })
 }
 
 impl Gui {
     pub(crate) fn new(window: &Window, device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let ctx = egui::Context::default();
+        ctx.options_mut(|options| {
+            options.zoom_with_keyboard = false;
+            options.zoom_factor = scaling::zoom_factor(100.0);
+        });
         setup_custom_fonts(&ctx);
         egui_extras::install_image_loaders(&ctx);
         ctx.global_style_mut(|style| {
@@ -84,13 +100,42 @@ impl Gui {
             ctx,
             state,
             renderer,
+            last_cursor_event: None,
             #[cfg(target_arch = "wasm32")]
             pending_pastes: Vec::new(),
         }
     }
 
     pub(crate) fn handle_event(&mut self, window: &Window, event: &WindowEvent) -> egui_winit::EventResponse {
+        match event {
+            WindowEvent::CursorMoved { .. } => self.last_cursor_event = Some(event.clone()),
+            WindowEvent::CursorLeft { .. } => self.last_cursor_event = None,
+            _ => {}
+        }
         self.state.on_window_event(window, event)
+    }
+
+    fn update_scale(&mut self, window: &Window, size_percent: f64) {
+        let zoom = scaling::zoom_factor(size_percent);
+        let old_zoom = self.ctx.zoom_factor();
+        if zoom == old_zoom {
+            return;
+        }
+        // Apply before take_egui_input so it computes the current screen rect.
+        // set_zoom_factor defers the change and replaces that rect with the
+        // previous frame's dimensions, which causes a lag during live resizing.
+        self.ctx.options_mut(|options| options.zoom_factor = zoom);
+        scaling::rescale_events(&mut self.state.egui_input_mut().events, old_zoom / zoom);
+        // Refresh egui-winit's cached pointer too: a click can follow a resize
+        // without a physical mouse move. This also updates egui's hover position.
+        if let Some(event) = &self.last_cursor_event {
+            let _ = self.state.on_window_event(window, event);
+        }
+    }
+
+    pub(crate) fn overlay_at_physical_position(&self, x: f32, y: f32) -> bool {
+        let point = egui::pos2(x, y) / self.ctx.pixels_per_point();
+        self.ctx.layer_id_at(point).is_some_and(|layer| layer.order != egui::Order::Background)
     }
 
     pub(crate) fn pointer_over_ui(&self) -> bool {
@@ -135,15 +180,25 @@ impl Gui {
         camera_up: [f32; 3],
         world_per_physical_pixel: Option<f64>,
     ) -> UiFrameOutput {
+        self.update_scale(window, editor.ui_size_percent);
         let selection_color = SELECTION_COLOR;
         let visuals = &self.ctx.global_style().visuals;
         if visuals.dark_mode != editor.dark_mode || visuals.selection.stroke.color != selection_color {
             self.ctx.set_visuals(theme_visuals(editor.dark_mode, selection_color));
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let raw_input = self.state.take_egui_input(window);
-        #[cfg(target_arch = "wasm32")]
         let mut raw_input = self.state.take_egui_input(window);
+        // egui-winit lays the UI out for the window, but these shapes are
+        // rendered into the surface texture, which a browser drag-resize
+        // leaves rounded up past the window (see `App::take_resize_to_apply`).
+        // Lay out for the surface instead, so the UI fills the buffer the
+        // browser then scales onto the canvas; sized to the window it would
+        // stop short of the edge and show a strip of bare scene past the
+        // panels. Outside a drag the two agree and this changes nothing.
+        if let Some(window_rect) = raw_input.screen_rect
+            && let Some(surface_rect) = surface_screen_rect(window_rect, window.inner_size().width, screen_size)
+        {
+            raw_input.screen_rect = Some(surface_rect);
+        }
         #[cfg(target_arch = "wasm32")]
         {
             // egui-winit's WASM build has only an in-process clipboard. Drop
@@ -555,8 +610,7 @@ fn draw_ui(
     let console_rect = editor.show_console.then(|| {
         let available_height = root_ui.available_height();
         let toolbar_height = elements::toolbars::bottom_toolbar_height(root_ui.ctx());
-        let console_min = (120.0_f32.min(available_height) - toolbar_height).max(0.0);
-        let console_max = (available_height - 72.0 - toolbar_height).max(console_min);
+        let (console_min, console_max) = chrome::panel_size_limits(root_ui.ctx(), available_height - toolbar_height);
         elements::console::draw_console(root_ui, console_min, console_max, frame_context.console_snapshot)
     });
     if console_rect.is_none() {
@@ -567,19 +621,6 @@ fn draw_ui(
     }
 
     let bottom_toolbar_rect = elements::toolbars::draw_bottom_toolbar(root_ui, editor, commands);
-
-    // The Drill & Blast workspace's products, down the right edge. Claimed
-    // after the two strips below it, so it stops at the bottom toolbar's top
-    // and they carry on underneath it, and after the viewport bar, so it
-    // starts directly under it: the mockup's shape, and the order it takes to
-    // get there.
-    let products_rect = (editor.active_workspace == state::Workspace::DrillAndBlast).then(|| elements::products::draw_products_panel(root_ui, editor));
-    if products_rect.is_none() {
-        // `Panel::show` creates one direct child of `root_ui`. Keep the root
-        // auto-id sequence identical in the workspaces without this panel, or
-        // every panel drawn after it receives a different unique id.
-        root_ui.skip_ahead_auto_ids(1);
-    }
 
     // The drawing tools are a docked column between the explorer and the
     // scene, so they are claimed before the scene's rect is worked out: what
@@ -1091,7 +1132,7 @@ fn draw_ui(
     let ctx = root_ui.ctx().clone();
     chrome::paint_window_background(&ctx, window_background, scene_rect);
     let console_claimed = console_rect.unwrap_or(egui::Rect::NOTHING);
-    let products_claimed = products_rect.unwrap_or(egui::Rect::NOTHING);
+    let products_claimed = explorer.products.unwrap_or(egui::Rect::NOTHING);
     chrome::paint_regions(
         &ctx,
         [
@@ -1110,7 +1151,7 @@ fn draw_ui(
         [
             chrome::Grip::new(explorer.column, chrome::Edge::Right, elements::explorer::PANEL_ID),
             chrome::Grip::new(console_claimed, chrome::Edge::Top, elements::console::PANEL_ID),
-            chrome::Grip::new(products_claimed, chrome::Edge::Left, elements::products::PANEL_ID),
+            chrome::Grip::new(products_claimed, chrome::Edge::Top, elements::products::PANEL_ID),
         ],
     );
 
