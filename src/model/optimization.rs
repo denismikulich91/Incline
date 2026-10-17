@@ -903,6 +903,33 @@ impl FactorListIssue {
 }
 
 impl OutputSettings {
+    /// The revenue factors a run makes shells at, ascending, or why there are
+    /// none: one factor of 1 for a single shell, else the range or the typed list.
+    pub(crate) fn factors(&self) -> Result<Vec<f64>, String> {
+        use crate::model::optimization_run::prepare::MAX_SHELLS;
+        if self.mode == ShellMode::Single {
+            return Ok(vec![1.0]);
+        }
+        match self.factor_input {
+            FactorInput::Range => {
+                let (from, to) = (self.factor_from, self.factor_to);
+                let count = shell_count_for_step(from, to, self.factor_step).map(|count| count as usize);
+                let Some(count) = count.filter(|count| (2..=MAX_SHELLS).contains(count) && from > 0.0) else {
+                    return Err(tr!("opt-run-factor-range", max = MAX_SHELLS.to_string()));
+                };
+                let step = (to - from) / (count - 1) as f64;
+                // Rounded, so a factor reads 0.9 rather than 0.8999999999999999.
+                let factor = |index: usize| round_factor(from + step * index as f64);
+                Ok((0..count).map(|index| if index + 1 == count { to } else { factor(index) }).collect())
+            }
+            FactorInput::List => match parse_factor_list(&self.factor_list) {
+                Ok(factors) if factors.len() <= MAX_SHELLS => Ok(factors),
+                Ok(_) => Err(tr!("opt-run-factor-range", max = MAX_SHELLS.to_string())),
+                Err(issue) => Err(issue.message()),
+            },
+        }
+    }
+
     /// Set the number of shells to what the (rounded) step really makes.
     ///
     /// The step is the one a run uses. A count typed in is turned into a step
@@ -991,6 +1018,9 @@ pub(crate) struct OptimizationScenario {
     pub(crate) revenues: Vec<RevenueRow>,
     pub(crate) slope: SlopeSettings,
     pub(crate) output: OutputSettings,
+    /// The NPV schedules of this scenario's shells. Not part of its
+    /// fingerprint: editing a schedule does not make the scenario stale.
+    pub(crate) schedules: Vec<crate::model::scheduling::Schedule>,
 }
 
 impl Default for OptimizationScenario {
@@ -1033,14 +1063,16 @@ impl OptimizationScenario {
             revenues: vec![RevenueRow::default()],
             slope: SlopeSettings::default(),
             output: OutputSettings::default(),
+            schedules: Vec::new(),
         }
     }
 
     /// A key that changes when anything a run depends on changes: everything
-    /// but the name.
+    /// but the name and the schedules.
     pub(crate) fn fingerprint(&self) -> u64 {
         let mut settings = self.clone();
         settings.name.clear();
+        settings.schedules.clear();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         serde_json::to_string(&settings).unwrap_or_default().hash(&mut hasher);
         hasher.finish()
@@ -1115,6 +1147,10 @@ impl OptimizationScenario {
         // Scenarios saved before the count followed the step may show a count
         // their step does not make.
         self.output.match_count_to_step();
+        let quality = self.quality_field.clone();
+        for schedule in &mut self.schedules {
+            schedule.migrate(&quality);
+        }
     }
 
     /// Choose the field the mining cost varies by (empty for none). Rows whose

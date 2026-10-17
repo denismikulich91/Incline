@@ -3698,6 +3698,51 @@ pub(crate) enum UiCommand {
         id: u64,
         name: String,
     },
+    /// Start a new schedule of scenario `parent` in the schedule editor.
+    AddSchedule(u64),
+    /// Open a schedule in the schedule editor.
+    EditSchedule {
+        parent: u64,
+        id: u64,
+    },
+    /// Keep the edited schedule in its scenario and hand the scenarios to the
+    /// project. The editor stays open unless `then_close`.
+    SaveSchedule {
+        parent: u64,
+        schedule: Box<crate::model::scheduling::Schedule>,
+        then_close: bool,
+    },
+    DeleteSchedule {
+        parent: u64,
+        id: u64,
+    },
+    /// Copy a schedule to a new one right after it, in the same scenario.
+    DuplicateSchedule {
+        parent: u64,
+        id: u64,
+    },
+    RenameSchedule {
+        parent: u64,
+        id: u64,
+        name: String,
+    },
+    /// Move a schedule from scenario `from` to scenario `to` (dropped there).
+    MoveSchedule {
+        id: u64,
+        from: u64,
+        to: u64,
+    },
+    /// Copy a schedule of scenario `from` into scenario `to` (dropped there).
+    CopyScheduleTo {
+        id: u64,
+        from: u64,
+        to: u64,
+    },
+    /// Run a schedule on its scenario's run of this session.
+    RunSchedule {
+        parent: u64,
+        id: u64,
+    },
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
@@ -3968,6 +4013,10 @@ impl UiCommand {
             | Self::BeginShellStartPick
             | Self::RunOptimizationScenario(_)
             | Self::CancelOptimizationScenario(_)
+            | Self::AddSchedule(_)
+            | Self::EditSchedule { .. }
+            | Self::RenameSchedule { .. }
+            | Self::RunSchedule { .. }
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -4230,6 +4279,11 @@ impl UiCommand {
             Self::ImportOptimizationScenarios => report(tr!("opt-import-json"), tr!("opt-import-summary")),
             Self::DuplicateOptimizationScenario(id) => report(tr!("opt-duplicate-scenario"), id.to_string()),
             Self::DeleteOptimizationScenario(id) => report(tr!("opt-delete-scenario"), id.to_string()),
+            Self::SaveSchedule { schedule, .. } => report(tr!("sched-save"), schedule.name.clone()),
+            Self::DeleteSchedule { id, .. } => report(tr!("sched-delete"), id.to_string()),
+            Self::DuplicateSchedule { id, .. } => report(tr!("sched-duplicate"), id.to_string()),
+            Self::MoveSchedule { id, .. } => report(tr!("sched-move-here"), id.to_string()),
+            Self::CopyScheduleTo { id, .. } => report(tr!("sched-duplicate-here"), id.to_string()),
             Self::ExecuteCreateBlockModel { name, .. } => report(tr!("common-create-block-model"), name.clone()),
             Self::ExecuteCreateOreTriangulation { name, .. } => report(tr!("common-create-ore-triangulation"), name.clone()),
             Self::ExportPlotSheet => report(tr!("common-export-engineering-drawing"), tr!("state-choose-destination")),
@@ -4651,6 +4705,108 @@ impl ScenarioDraft {
     }
 }
 
+/// The schedule editor's sections, in display order.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ScheduleTab {
+    #[default]
+    Pushbacks,
+    Periods,
+    Capacities,
+    Stockpiles,
+    CostsEvents,
+    Outputs,
+}
+
+impl ScheduleTab {
+    pub(crate) const ALL: [Self; 6] = [Self::Pushbacks, Self::Periods, Self::Capacities, Self::Stockpiles, Self::CostsEvents, Self::Outputs];
+
+    pub(crate) fn label(self) -> String {
+        match self {
+            Self::Pushbacks => tr!("sched-section-pushbacks"),
+            Self::Periods => tr!("sched-section-periods"),
+            Self::Capacities => tr!("sched-section-capacities"),
+            Self::Stockpiles => tr!("sched-section-stockpiles"),
+            Self::CostsEvents => tr!("sched-section-costs"),
+            Self::Outputs => tr!("sched-section-outputs"),
+        }
+    }
+}
+
+/// The selected row of each of the schedule editor's grids.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ScheduleGridSelections {
+    pub(crate) process: Option<usize>,
+    pub(crate) selling: Option<usize>,
+    pub(crate) stockpile: Option<usize>,
+    pub(crate) grade: Option<usize>,
+    pub(crate) event: Option<usize>,
+}
+
+/// The schedule the schedule editor is working on, apart from the saved copy
+/// (as [`ScenarioDraft`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleDraft {
+    /// The scenario the schedule belongs to.
+    pub(crate) parent: u64,
+    pub(crate) schedule: crate::model::scheduling::Schedule,
+    pub(crate) saved: crate::model::scheduling::Schedule,
+    pub(crate) is_new: bool,
+    pub(crate) confirm_close: bool,
+    pub(crate) selections: ScheduleGridSelections,
+    pub(crate) tab: ScheduleTab,
+}
+
+impl ScheduleDraft {
+    pub(crate) fn new(parent: u64, schedule: crate::model::scheduling::Schedule, is_new: bool) -> Self {
+        Self {
+            parent,
+            saved: schedule.clone(),
+            schedule,
+            is_new,
+            confirm_close: false,
+            selections: ScheduleGridSelections::default(),
+            tab: ScheduleTab::default(),
+        }
+    }
+
+    pub(crate) fn dirty(&self) -> bool {
+        self.schedule != self.saved
+    }
+}
+
+/// What the scenarios list shows beside a schedule.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum ScheduleStatus {
+    /// Its scenario has no up-to-date run in this session to schedule.
+    Blocked,
+    NeverRun,
+    UpToDate,
+    Stale,
+    Queued,
+    Running(f32),
+}
+
+/// A schedule run's NPVs at the shell where the fixed-lead NPV peaks, for the
+/// list's NPV column. Filled by the scheduling engine (stage 2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ScheduleSummary {
+    /// 0-based shell of the parent's run.
+    pub(crate) best_shell: usize,
+    pub(crate) npv_best: f64,
+    pub(crate) npv_worst: f64,
+    pub(crate) npv_lead: f64,
+}
+
+/// A schedule dropped on another scenario, waiting for Move or Duplicate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct ScheduleDrop {
+    pub(crate) id: u64,
+    pub(crate) from: u64,
+    pub(crate) to: u64,
+    /// Where the pointer was released; the menu opens there.
+    pub(crate) pos: egui::Pos2,
+}
+
 /// Where a scenario's run stands. A finished run keeps the fingerprint of the
 /// settings it ran with, so a later edit shows as stale.
 #[derive(Clone, Debug)]
@@ -4720,6 +4876,17 @@ pub(crate) struct OptimizationState {
     pub(crate) report_columns: std::collections::BTreeMap<String, Vec<String>>,
     /// Asking whether to load the unloaded inputs a run or pick needs.
     pub(crate) load_prompt: Option<LoadPrompt>,
+    /// The schedule editor. Never open with `draft`; the list hides behind either.
+    pub(crate) schedule_draft: Option<ScheduleDraft>,
+    /// Scenarios whose schedules are listed under them.
+    pub(crate) expanded: HashSet<u64>,
+    /// A schedule dropped on another scenario, asking Move or Duplicate.
+    pub(crate) drop_menu: Option<ScheduleDrop>,
+    /// Schedule runs by schedule id; a finished one keeps the schedule's and
+    /// its scenario run's fingerprints combined (see [`Self::schedule_status`]).
+    pub(crate) schedule_runs: HashMap<u64, RunState>,
+    /// What each schedule's last run found, by schedule id.
+    pub(crate) schedule_summaries: HashMap<u64, ScheduleSummary>,
 }
 
 /// Inputs of an optimization that are unloaded, and what to do once they are
@@ -4824,8 +4991,17 @@ impl OptimizationState {
     }
 
     /// An id no scenario in the list carries.
+    /// An id no scenario or schedule has: they share one counter, so a
+    /// schedule id names one schedule whichever scenario it moves to.
     pub(crate) fn fresh_id(&mut self) -> u64 {
-        let id = self.next_scenario_id.max(self.scenarios.iter().map(|scenario| scenario.id + 1).max().unwrap_or(0));
+        let taken = self
+            .scenarios
+            .iter()
+            .flat_map(|scenario| std::iter::once(scenario.id).chain(scenario.schedules.iter().map(|schedule| schedule.id)))
+            .map(|id| id + 1)
+            .max()
+            .unwrap_or(0);
+        let id = self.next_scenario_id.max(taken);
         self.next_scenario_id = id + 1;
         id
     }
@@ -4838,6 +5014,45 @@ impl OptimizationState {
             Some(RunState::Finished { fingerprint }) if *fingerprint == scenario.fingerprint() => ScenarioStatus::UpToDate,
             Some(RunState::Finished { .. }) => ScenarioStatus::Stale,
         }
+    }
+
+    /// Give a scenario that is about to join the list (a copy, an import) new
+    /// schedule ids, so no two schedules share one.
+    pub(crate) fn refresh_schedule_ids(&mut self, scenario: &mut OptimizationScenario) {
+        for schedule in &mut scenario.schedules {
+            schedule.id = self.fresh_id();
+        }
+    }
+
+    /// A schedule's run key: its settings and the run of its scenario it
+    /// scheduled, so rerunning the scenario makes the schedule stale too.
+    pub(crate) fn schedule_fingerprint(&self, parent: &OptimizationScenario, schedule: &crate::model::scheduling::Schedule) -> u64 {
+        let parent_run = match self.runs.get(&parent.id) {
+            Some(RunState::Finished { fingerprint }) => *fingerprint,
+            _ => 0,
+        };
+        schedule.fingerprint() ^ parent_run.rotate_left(17)
+    }
+
+    pub(crate) fn schedule_status(&self, parent: &OptimizationScenario, schedule: &crate::model::scheduling::Schedule) -> ScheduleStatus {
+        if self.status(parent) != ScenarioStatus::UpToDate || !self.results.contains_key(&parent.id) {
+            return ScheduleStatus::Blocked;
+        }
+        match self.schedule_runs.get(&schedule.id) {
+            None => ScheduleStatus::NeverRun,
+            Some(RunState::Queued) => ScheduleStatus::Queued,
+            Some(RunState::Running { progress, .. }) => ScheduleStatus::Running(progress.snapshot().map_or(0.0, |snapshot| snapshot.fraction)),
+            Some(RunState::Finished { fingerprint }) if *fingerprint == self.schedule_fingerprint(parent, schedule) => ScheduleStatus::UpToDate,
+            Some(RunState::Finished { .. }) => ScheduleStatus::Stale,
+        }
+    }
+
+    /// The NPV summary the list shows for a schedule: only for a run that is
+    /// up to date.
+    pub(crate) fn schedule_summary(&self, parent: &OptimizationScenario, schedule: &crate::model::scheduling::Schedule) -> Option<ScheduleSummary> {
+        (self.schedule_status(parent, schedule) == ScheduleStatus::UpToDate)
+            .then(|| self.schedule_summaries.get(&schedule.id).copied())
+            .flatten()
     }
 
     /// Whether a run is going or waiting, so the list keeps repainting.

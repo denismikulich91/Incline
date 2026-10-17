@@ -19,9 +19,13 @@ use crate::{
             ProcessingMethod, RevenueRow, RocktypeCost, RosetteInterpolation, RosetteIssue, RosetteRow, SalesUnit, ShellDirection, ShellFieldMode, ShellFieldValue, ShellMode,
             SlopeMode, ValueType, group_names, move_constants_row, parse_factor_list, shell_count_for_step, shell_prefix_taken, shell_step_for_count, unique_name,
         },
+        scheduling::format_money,
     },
     ui::{
-        state::{EditorState, OptimizationState, ScenarioDraft, ScenarioGridSelections, ScenarioStatus, ScenarioTab, UiCommand, UiProjectView},
+        state::{
+            EditorState, OptimizationState, ScenarioDraft, ScenarioGridSelections, ScenarioStatus, ScenarioTab, ScheduleDrop, ScheduleStatus, ScheduleSummary, UiCommand,
+            UiProjectView,
+        },
         themed_icon, unthemed_icon,
         widgets::{
             collapsible_section::CollapsibleSection,
@@ -34,10 +38,10 @@ use crate::{
     },
 };
 
-const EDITOR_WIDTH: f32 = 800.0;
+pub(super) const EDITOR_WIDTH: f32 = 800.0;
 /// Space between the settings and the section menu beside them.
-const SIDE_GAP: f32 = 8.0;
-const MENU_ITEM_HEIGHT: f32 = 32.0;
+pub(super) const SIDE_GAP: f32 = 8.0;
+pub(super) const MENU_ITEM_HEIGHT: f32 = 32.0;
 const MENU_ICON: f32 = 22.0;
 /// Wide enough for the long names sensitivity studies get.
 const LIST_WIDTH: f32 = 806.0;
@@ -59,6 +63,8 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
             menu::dialog_cancel_pressed(ui.ctx());
         }
         draw_scenario_editor(ui, &mut editor.optimization, block_models, project, commands);
+    } else if editor.optimization.schedule_draft.is_some() {
+        super::scheduling::draw_schedule_editor(ui, &mut editor.optimization, block_models, commands);
     } else if editor.optimization.list_open {
         draw_scenarios_list(ui, &mut editor.optimization, block_models, project, commands);
     }
@@ -67,7 +73,8 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
     draw_load_prompt(ui, &mut editor.optimization, commands);
     // The picker belongs to the editor: it goes with it, and does not come
     // back the next time the editor opens.
-    if editor.optimization.draft.is_some() && editor.optimization.start_pick.is_none() {
+    let editing = editor.optimization.draft.is_some() || editor.optimization.schedule_draft.is_some();
+    if editing && editor.optimization.start_pick.is_none() {
         value_field::draw_constant_picker(ui.ctx());
     } else {
         value_field::close_constant_picker(ui.ctx());
@@ -134,13 +141,22 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
             // As tall as the rows up to the editor's body height, then they scroll.
             let max_height = body_height(ui.ctx());
             egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
+                let mut toggled = None;
+                let mut dropped = None;
                 for scenario in &state.scenarios {
                     let status = state.status(scenario);
-                    ui.horizontal(|ui| {
+                    let expanded = state.expanded.contains(&scenario.id);
+                    let row = ui.horizontal(|ui| {
+                        // The disclosure arrow, or the room it takes, so names line up.
+                        if scenario.schedules.is_empty() {
+                            ui.add_space(DISCLOSURE_WIDTH);
+                        } else if disclosure(ui, expanded).clicked() {
+                            toggled = Some(scenario.id);
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
-                            // Drawn right to left, so they read: edit, duplicate,
-                            // delete, state, results, run.
+                            // Drawn right to left, so they read: add schedule,
+                            // edit, duplicate, delete, state, results, run.
                             if play_button(ui, status).clicked() {
                                 run = Some(scenario.id);
                             }
@@ -180,10 +196,50 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                             if ui.add(edit).clicked() {
                                 actions.push(UiCommand::EditOptimizationScenario(scenario.id));
                             }
-                            draw_name_field(ui, scenario.id, &scenario.name, commands);
+                            let add = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "grid_add.svg")), tr!("sched-add"))
+                                .id_salt(("sched_add", scenario.id))
+                                .button_side(ICON_SIDE);
+                            if ui.add(add).clicked() {
+                                actions.push(UiCommand::AddSchedule(scenario.id));
+                            }
+                            draw_name_field(ui, scenario.id, &scenario.name, commands, |id, name| UiCommand::RenameOptimizationScenario { id, name });
                         });
                     });
+                    // A schedule dragged over another scenario's row may be dropped there.
+                    if let Some(drag) = egui::DragAndDrop::payload::<ScheduleDrag>(ui.ctx())
+                        && drag.from != scenario.id
+                        && row.response.contains_pointer()
+                    {
+                        ui.painter().rect_stroke(
+                            row.response.rect.expand(1.0),
+                            crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS,
+                            ui.visuals().selection.stroke,
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    if egui::DragAndDrop::has_payload_of_type::<ScheduleDrag>(ui.ctx())
+                        && let Some(drag) = row.response.dnd_release_payload::<ScheduleDrag>()
+                        && drag.from != scenario.id
+                    {
+                        dropped = Some(ScheduleDrop {
+                            id: drag.id,
+                            from: drag.from,
+                            to: scenario.id,
+                            pos: ui.ctx().pointer_latest_pos().unwrap_or(row.response.rect.center()),
+                        });
+                    }
                     ui.add_space(2.0);
+                    if expanded {
+                        draw_schedule_rows(ui, state, scenario, &mut actions, commands);
+                    }
+                }
+                if let Some(id) = toggled
+                    && !state.expanded.remove(&id)
+                {
+                    state.expanded.insert(id);
+                }
+                if let Some(drop) = dropped {
+                    state.drop_menu = Some(drop);
                 }
             });
             menu::menu_actions(ui, |ui| {
@@ -235,12 +291,245 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
     }
     if close || !open {
         state.list_open = false;
+        state.drop_menu = None;
+    } else {
+        draw_drop_menu(ui.ctx(), state, commands);
+    }
+}
+
+// ── Schedules in the list ──
+
+/// What a dragged schedule row carries: the schedule and the scenario it is under.
+#[derive(Clone, Copy, Debug)]
+struct ScheduleDrag {
+    id: u64,
+    from: u64,
+}
+
+/// Room the disclosure arrow takes before a scenario's name.
+const DISCLOSURE_WIDTH: f32 = 18.0;
+
+/// The arrow that shows or hides a scenario's schedules.
+fn disclosure(ui: &mut egui::Ui, expanded: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(DISCLOSURE_WIDTH - ui.spacing().item_spacing.x, ICON_SIDE), egui::Sense::click());
+    let color = if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    let center = rect.center();
+    let half = 4.0;
+    let points = if expanded {
+        vec![
+            center + egui::vec2(-half, -half / 2.0),
+            center + egui::vec2(half, -half / 2.0),
+            center + egui::vec2(0.0, half),
+        ]
+    } else {
+        vec![
+            center + egui::vec2(-half / 2.0, -half),
+            center + egui::vec2(half, 0.0),
+            center + egui::vec2(-half / 2.0, half),
+        ]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+    response.on_hover_text(if expanded { tr!("sched-hide-schedules") } else { tr!("sched-show-schedules") })
+}
+
+/// A scenario's schedules, one row each under it: a drag grip on the guide
+/// line, the name, the NPV, then the scenario row's icons in the same order.
+fn draw_schedule_rows(ui: &mut egui::Ui, state: &OptimizationState, scenario: &OptimizationScenario, actions: &mut Vec<UiCommand>, commands: &mut Vec<UiCommand>) {
+    let parent = scenario.id;
+    // The highest NPV among the scenario's schedules is shown in the accent.
+    let summaries: Vec<Option<ScheduleSummary>> = scenario.schedules.iter().map(|schedule| state.schedule_summary(scenario, schedule)).collect();
+    let top = summaries.iter().flatten().map(|summary| summary.npv_lead).fold(f64::NEG_INFINITY, f64::max);
+    let names: Vec<String> = scenario.schedules.iter().map(|schedule| schedule.name.trim().to_lowercase()).collect();
+    for (index, schedule) in scenario.schedules.iter().enumerate() {
+        let status = state.schedule_status(scenario, schedule);
+        let issues = schedule.issues(scenario);
+        ui.horizontal(|ui| {
+            ui.add_space(DISCLOSURE_WIDTH);
+            // The grip: drag it onto another scenario to move or copy the schedule.
+            let (grip, response) = ui.allocate_exact_size(egui::vec2(ICON_SIDE - 6.0, ICON_SIDE), egui::Sense::drag());
+            let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+            ui.painter().vline(grip.left() + 3.0, grip.y_range().expand(1.0), stroke);
+            let dots = if response.hovered() || response.dragged() {
+                ui.visuals().strong_text_color()
+            } else {
+                ui.visuals().weak_text_color()
+            };
+            for row in 0..3 {
+                for column in 0..2 {
+                    let at = egui::pos2(grip.center().x + 2.0 + column as f32 * 4.0, grip.center().y - 4.0 + row as f32 * 4.0);
+                    ui.painter().circle_filled(at, 1.2, dots);
+                }
+            }
+            response.dnd_set_drag_payload(ScheduleDrag { id: schedule.id, from: parent });
+            if response.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            } else if response.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+            }
+            response.on_hover_text(tr!("sched-drag-hint"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let blocked = status == ScheduleStatus::Blocked;
+                let play = ui.add_enabled_ui(!blocked, |ui| play_button(ui, schedule_play_status(status))).inner;
+                let play = if blocked { play.on_disabled_hover_text(tr!("sched-blocked")) } else { play };
+                if play.clicked() {
+                    actions.push(UiCommand::RunSchedule { parent, id: schedule.id });
+                }
+                // Results come with the schedule engine.
+                let results = ToolbarButton::new(
+                    egui::Image::new(unthemed_icon!("results_scenario.svg")).tint(menu::accent_fill(ui.visuals())),
+                    tr!("opt-results-not-run"),
+                )
+                .id_salt(("sched_results", schedule.id))
+                .button_side(ICON_SIDE);
+                ui.add_enabled_ui(false, |ui| ui.add(results));
+                schedule_status_icon(ui, status);
+                if !issues.is_empty() {
+                    let image = egui::Image::new(unthemed_icon!("status_broken.svg")).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
+                    let lines: Vec<String> = issues.iter().map(|issue| format!("• {issue}")).collect();
+                    ui.add_sized([ICON_SIDE, ICON_SIDE], image)
+                        .on_hover_text(format!("{}\n{}", tr!("sched-issues-title"), lines.join("\n")));
+                }
+                let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("sched-delete"))
+                    .id_salt(("sched_delete", schedule.id))
+                    .button_side(ICON_SIDE);
+                if ui.add(delete).clicked() {
+                    actions.push(UiCommand::DeleteSchedule { parent, id: schedule.id });
+                }
+                let duplicate = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "duplicate.svg")), tr!("sched-duplicate"))
+                    .id_salt(("sched_duplicate", schedule.id))
+                    .button_side(ICON_SIDE);
+                if ui.add(duplicate).clicked() {
+                    actions.push(UiCommand::DuplicateSchedule { parent, id: schedule.id });
+                }
+                let edit = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "edit.svg")), tr!("sched-edit"))
+                    .id_salt(("sched_edit", schedule.id))
+                    .button_side(ICON_SIDE);
+                if ui.add(edit).clicked() {
+                    actions.push(UiCommand::EditSchedule { parent, id: schedule.id });
+                }
+                npv_cell(ui, summaries[index], summaries[index].is_some_and(|summary| summary.npv_lead >= top));
+                let duplicate_name = names.iter().enumerate().any(|(other, name)| other != index && *name == names[index]);
+                let name = draw_name_field(ui, schedule.id, &schedule.name, commands, move |id, name| UiCommand::RenameSchedule { parent, id, name });
+                if duplicate_name {
+                    mark_invalid(ui, &name);
+                    name.on_hover_text(tr!("sched-name-taken"));
+                }
+            });
+        });
+        ui.add_space(2.0);
+    }
+}
+
+/// The schedule's NPV, or a dash before a run: right-aligned in a fixed
+/// width, so the column lines up down the list.
+fn npv_cell(ui: &mut egui::Ui, summary: Option<ScheduleSummary>, highest: bool) {
+    let text = summary.map_or_else(|| "\u{2014}".to_owned(), |summary| format_money(summary.npv_lead));
+    let mut rich = egui::RichText::new(text).monospace();
+    if highest {
+        rich = rich.color(menu::accent_fill(ui.visuals())).strong();
+    }
+    let response = ui.add_sized([NPV_WIDTH, ICON_SIDE], egui::Label::new(rich));
+    match summary {
+        Some(summary) => response.on_hover_text(tr!(
+            "sched-npv-hover",
+            shell = (summary.best_shell + 1).to_string(),
+            lead = format_money(summary.npv_lead),
+            best = format_money(summary.npv_best),
+            worst = format_money(summary.npv_worst)
+        )),
+        None => response.on_hover_text(tr!("sched-npv-none")),
+    };
+}
+
+const NPV_WIDTH: f32 = 82.0;
+
+/// The play button's look for a schedule (the scenario's, minus Blocked).
+fn schedule_play_status(status: ScheduleStatus) -> ScenarioStatus {
+    match status {
+        ScheduleStatus::Blocked | ScheduleStatus::NeverRun => ScenarioStatus::NeverRun,
+        ScheduleStatus::UpToDate => ScenarioStatus::UpToDate,
+        ScheduleStatus::Stale => ScenarioStatus::Stale,
+        ScheduleStatus::Queued => ScenarioStatus::Queued,
+        ScheduleStatus::Running(progress) => ScenarioStatus::Running(progress),
+    }
+}
+
+/// The state icon of a schedule: the scenario's icons, and Blocked as the
+/// not-run icon dimmed, with why on hover.
+fn schedule_status_icon(ui: &mut egui::Ui, status: ScheduleStatus) {
+    if status != ScheduleStatus::Blocked {
+        status_icon(ui, schedule_play_status(status));
+        return;
+    }
+    let image = egui::Image::new(unthemed_icon!("status_not_run.svg"))
+        .fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0))
+        .tint(egui::Color32::from_white_alpha(110));
+    ui.add_sized([ICON_SIDE, ICON_SIDE], image).on_hover_text(tr!("sched-blocked"));
+}
+
+/// Move here / Duplicate here / Cancel, at the point a schedule was dropped on
+/// another scenario.
+fn draw_drop_menu(ctx: &egui::Context, state: &mut OptimizationState, commands: &mut Vec<UiCommand>) {
+    let Some(drop) = state.drop_menu else {
+        return;
+    };
+    let target = state.scenarios.iter().find(|scenario| scenario.id == drop.to).map(|scenario| scenario.name.clone());
+    let Some(target) = target else {
+        state.drop_menu = None;
+        return;
+    };
+    let mut choice = None;
+    let area = egui::Area::new(egui::Id::new("schedule_drop_menu"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(drop.pos)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_min_width(180.0);
+                ui.label(egui::RichText::new(tr!("sched-drop-title", scenario = target.clone())).weak());
+                if ui.add(MenuButton::new(tr!("sched-move-here")).min_width(170.0)).clicked() {
+                    choice = Some(true);
+                }
+                if ui.add(MenuButton::new(tr!("sched-duplicate-here")).min_width(170.0)).clicked() {
+                    choice = Some(false);
+                }
+                if ui.add(MenuButton::new(tr!("common-cancel")).min_width(170.0)).clicked() {
+                    state.drop_menu = None;
+                }
+            });
+        });
+    // A click anywhere else, or Escape, cancels.
+    let clicked_away = ctx.input(|input| input.pointer.any_pressed()) && !area.response.contains_pointer();
+    if clicked_away || menu::dialog_cancel_pressed(ctx) {
+        state.drop_menu = None;
+    }
+    if let Some(moving) = choice {
+        state.drop_menu = None;
+        commands.push(if moving {
+            UiCommand::MoveSchedule {
+                id: drop.id,
+                from: drop.from,
+                to: drop.to,
+            }
+        } else {
+            UiCommand::CopyScheduleTo {
+                id: drop.id,
+                from: drop.from,
+                to: drop.to,
+            }
+        });
+        // The scenario that took it opens, so the result shows.
+        state.expanded.insert(drop.to);
     }
 }
 
 /// Height the editor's sections scroll within, and the list's rows: fixed, so
 /// neither window grows past the screen.
-fn body_height(ctx: &egui::Context) -> f32 {
+pub(super) fn body_height(ctx: &egui::Context) -> f32 {
     (ctx.content_rect().height() - 260.0).clamp(240.0, 560.0)
 }
 
@@ -252,25 +541,32 @@ fn name_field_ids(id: u64) -> (egui::Id, egui::Id) {
 /// Send the rename of every name still being typed, and take the focus from
 /// its field, so the next command sees the new name.
 fn commit_typed_names(ctx: &egui::Context, state: &OptimizationState, commands: &mut Vec<UiCommand>) {
-    for scenario in &state.scenarios {
-        let (field_id, buffer_id) = name_field_ids(scenario.id);
-        let Some(typed) = ctx.data_mut(|data| data.remove_temp::<String>(buffer_id)) else {
-            continue;
-        };
+    let take = |id: u64, name: &str| {
+        let (field_id, buffer_id) = name_field_ids(id);
+        let typed = ctx.data_mut(|data| data.remove_temp::<String>(buffer_id))?;
         ctx.memory_mut(|memory| memory.surrender_focus(field_id));
-        let typed = typed.trim();
-        if !typed.is_empty() && typed != scenario.name {
-            commands.push(UiCommand::RenameOptimizationScenario {
-                id: scenario.id,
-                name: typed.to_owned(),
-            });
+        let typed = typed.trim().to_owned();
+        (!typed.is_empty() && typed != name).then_some(typed)
+    };
+    for scenario in &state.scenarios {
+        if let Some(name) = take(scenario.id, &scenario.name) {
+            commands.push(UiCommand::RenameOptimizationScenario { id: scenario.id, name });
+        }
+        for schedule in &scenario.schedules {
+            if let Some(name) = take(schedule.id, &schedule.name) {
+                commands.push(UiCommand::RenameSchedule {
+                    parent: scenario.id,
+                    id: schedule.id,
+                    name,
+                });
+            }
         }
     }
 }
 
 /// The scenario's name, typed in place; the rename is sent when focus leaves,
 /// or when any button of the list is clicked ([`commit_typed_names`]).
-fn draw_name_field(ui: &mut egui::Ui, id: u64, name: &str, commands: &mut Vec<UiCommand>) {
+fn draw_name_field(ui: &mut egui::Ui, id: u64, name: &str, commands: &mut Vec<UiCommand>, rename: impl Fn(u64, String) -> UiCommand) -> egui::Response {
     let (field_id, buffer_id) = name_field_ids(id);
 
     // What was typed is kept until the field is left, whatever the focus
@@ -284,10 +580,11 @@ fn draw_name_field(ui: &mut egui::Ui, id: u64, name: &str, commands: &mut Vec<Ui
     if pending.is_some() && !response.has_focus() {
         let typed = text.trim();
         if !typed.is_empty() && typed != name {
-            commands.push(UiCommand::RenameOptimizationScenario { id, name: typed.to_owned() });
+            commands.push(rename(id, typed.to_owned()));
         }
         ui.data_mut(|data| data.remove::<String>(buffer_id));
     }
+    response
 }
 
 fn status_icon(ui: &mut egui::Ui, status: ScenarioStatus) {
@@ -344,7 +641,7 @@ fn play_button(ui: &mut egui::Ui, status: ScenarioStatus) -> egui::Response {
 
 // ── Scenario editor ──
 
-fn model_fields(block_models: &[OpenBlockModel], name: &str) -> BlockModelFields {
+pub(super) fn model_fields(block_models: &[OpenBlockModel], name: &str) -> BlockModelFields {
     block_models.iter().find(|model| model.name == name).map(BlockModelFields::of_open).unwrap_or_default()
 }
 
@@ -441,7 +738,7 @@ fn draw_scenario_editor(ui: &mut egui::Ui, state: &mut OptimizationState, block_
 
 /// Give fields an outline at rest in the light theme, where their fill alone
 /// is too close to the card to see.
-fn outline_fields(ui: &mut egui::Ui) {
+pub(super) fn outline_fields(ui: &mut egui::Ui) {
     if !ui.visuals().dark_mode {
         ui.visuals_mut().widgets.inactive.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_gray(185));
     }
@@ -509,7 +806,7 @@ fn draw_section_menu(ui: &mut egui::Ui, height: f32, width: f32, current: &mut S
 
 /// One entry of the section menu: its icon and its name. Returns whether it
 /// was clicked.
-fn menu_item(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, selected: bool, enabled: bool) -> bool {
+pub(super) fn menu_item(ui: &mut egui::Ui, icon: egui::Image<'static>, label: &str, width: f32, selected: bool, enabled: bool) -> bool {
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, MENU_ITEM_HEIGHT), sense);
     let visuals = ui.visuals();
@@ -603,7 +900,7 @@ fn draw_confirm_close(ctx: &egui::Context, state: &mut OptimizationState, comman
 // one row its choice needs, rather than a run of radio buttons.
 
 /// A field row whose control `control` draws, handed the column's width.
-fn field_row<R>(ui: &mut egui::Ui, label: String, help: Option<String>, control: impl FnOnce(&mut egui::Ui, f32) -> R) -> R {
+pub(super) fn field_row<R>(ui: &mut egui::Ui, label: String, help: Option<String>, control: impl FnOnce(&mut egui::Ui, f32) -> R) -> R {
     let mut field = MenuField::new(label);
     if let Some(help) = help {
         field = field.help_text(help);
@@ -617,7 +914,7 @@ fn field_row<R>(ui: &mut egui::Ui, label: String, help: Option<String>, control:
     })
 }
 
-fn form_toggle(ui: &mut egui::Ui, label: String, help: Option<String>, value: &mut bool) -> egui::Response {
+pub(super) fn form_toggle(ui: &mut egui::Ui, label: String, help: Option<String>, value: &mut bool) -> egui::Response {
     let mut field = MenuFieldBool::new(label, value);
     if let Some(help) = help {
         field = field.help_text(help);
@@ -627,12 +924,12 @@ fn form_toggle(ui: &mut egui::Ui, label: String, help: Option<String>, value: &m
 
 /// A drop-down over `names`. Whatever the scenario already holds stays listed,
 /// so a field that is missing for the moment does not blank the choice.
-fn form_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: String, value: &mut String, names: &[String]) -> egui::Response {
+pub(super) fn form_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, label: String, value: &mut String, names: &[String]) -> egui::Response {
     field_row(ui, label, None, |ui, width| inline_combo(ui, id, value, names, tr!("opt-none-selected"), width))
 }
 
 /// A drop-down over a fixed set of choices.
-fn form_choice<T: Copy + PartialEq>(
+pub(super) fn form_choice<T: Copy + PartialEq>(
     ui: &mut egui::Ui,
     id: impl std::hash::Hash + std::fmt::Debug,
     label: String,
@@ -650,7 +947,7 @@ fn form_choice<T: Copy + PartialEq>(
 }
 
 /// An input/constant field in a labelled row, its unit (if any) after the number.
-fn form_value<T: FieldEditor>(
+pub(super) fn form_value<T: FieldEditor>(
     ui: &mut egui::Ui,
     id: impl std::hash::Hash + std::fmt::Debug,
     label: String,
@@ -668,7 +965,7 @@ fn form_value<T: FieldEditor>(
 // Every cost is multiplied by a block's tonnes (`optimization_run::values`),
 // so costs are per tonne; prices are per the element's sales unit.
 
-fn unit_per_tonne() -> String {
+pub(super) fn unit_per_tonne() -> String {
     tr!("opt-unit-per-tonne")
 }
 
@@ -680,12 +977,12 @@ fn unit_degrees() -> String {
     tr!("common-degree-suffix")
 }
 
-fn unit_percent() -> String {
+pub(super) fn unit_percent() -> String {
     tr!("common-percent-suffix")
 }
 
 /// Per one sales unit ("/oz"); nothing for a plain unit, which has no name.
-fn unit_per_sales(unit: SalesUnit) -> String {
+pub(super) fn unit_per_sales(unit: SalesUnit) -> String {
     if unit == SalesUnit::Unit { String::new() } else { format!("/{}", unit.label()) }
 }
 
@@ -699,7 +996,7 @@ fn combo_options(names: &[String], current: &str, empty_label: String) -> Vec<(S
 }
 
 /// A drop-down of the given width, unlabelled; changed when the choice is.
-fn inline_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut String, names: &[String], empty_label: String, width: f32) -> egui::Response {
+pub(super) fn inline_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut String, names: &[String], empty_label: String, width: f32) -> egui::Response {
     let selected = if value.is_empty() { empty_label.clone() } else { value.clone() };
     let options = combo_options(names, value, empty_label);
     let mut changed = false;
@@ -727,7 +1024,7 @@ fn inline_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, v
 
 /// A drop-down that fills the grid cell it is drawn in. A cell left empty is
 /// outlined in red when `required`.
-fn cell_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut String, names: &[String], empty_label: String, required: bool) {
+pub(super) fn cell_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut String, names: &[String], empty_label: String, required: bool) {
     let width = ui.available_width().max(40.0);
     let response = inline_combo(ui, id, value, names, empty_label, width);
     if required && value.is_empty() {
@@ -736,7 +1033,7 @@ fn cell_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, val
 }
 
 /// A drop-down over a fixed list of choices that fills the grid cell it is drawn in.
-fn cell_choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut T, all: &[T], label: impl Fn(T) -> String) {
+pub(super) fn cell_choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut T, all: &[T], label: impl Fn(T) -> String) {
     let width = ui.available_width().max(40.0);
     egui::ComboBox::from_id_salt(id).selected_text(label(*value)).width(width).truncate().show_ui(ui, |ui| {
         for option in all {
@@ -746,20 +1043,20 @@ fn cell_choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: impl std::hash::Hash 
 }
 
 /// A text box that fills its grid cell, outlined in red when `required` and empty.
-fn cell_text(ui: &mut egui::Ui, value: &mut String, required: bool) {
+pub(super) fn cell_text(ui: &mut egui::Ui, value: &mut String, required: bool) {
     let response = ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width()));
     if required && value.trim().is_empty() {
         mark_invalid(ui, &response);
     }
 }
 
-fn plain_rows(count: usize) -> Vec<GridRow> {
+pub(super) fn plain_rows(count: usize) -> Vec<GridRow> {
     vec![GridRow::Item; count]
 }
 
 /// One titled card of related settings. Every group in a section shows at
 /// once, so the card does not fold.
-fn option_group(ui: &mut egui::Ui, title: String, rows: impl FnOnce(&mut egui::Ui)) {
+pub(super) fn option_group(ui: &mut egui::Ui, title: String, rows: impl FnOnce(&mut egui::Ui)) {
     ui.add_space(4.0);
     CollapsibleSection::new(egui::Id::new(("optimization_group", title.as_str())), title)
         .collapsible(false)

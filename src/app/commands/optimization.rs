@@ -100,6 +100,8 @@ impl<'a> App<'a> {
         // The name is changed in the list only; the editor's copy never wins over it.
         if let Some(existing) = state.scenarios.iter().find(|existing| existing.id == scenario.id) {
             scenario.name = existing.name.clone();
+            // Schedules are kept in the list, not in the scenario editor.
+            scenario.schedules = existing.schedules.clone();
         }
         match state.scenarios.iter_mut().find(|existing| existing.id == scenario.id) {
             Some(existing) => *existing = scenario.clone(),
@@ -120,8 +122,16 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn delete_optimization_scenario(&mut self, id: u64) -> Result<()> {
-        self.editor.optimization.scenarios.retain(|scenario| scenario.id != id);
-        self.editor.optimization.runs.remove(&id);
+        let state = &mut self.editor.optimization;
+        if let Some(scenario) = state.scenarios.iter().find(|scenario| scenario.id == id) {
+            for schedule in &scenario.schedules {
+                state.schedule_runs.remove(&schedule.id);
+                state.schedule_summaries.remove(&schedule.id);
+            }
+        }
+        state.scenarios.retain(|scenario| scenario.id != id);
+        state.runs.remove(&id);
+        state.expanded.remove(&id);
         self.write_optimization_scenarios()
     }
 
@@ -133,6 +143,7 @@ impl<'a> App<'a> {
         };
         let mut copy = state.scenarios[position].clone();
         copy.id = state.fresh_id();
+        state.refresh_schedule_ids(&mut copy);
         copy.name = scenario_copy_name(&state.scenarios, &copy.name);
         copy.output.shell_layer_name = copy_prefix(&state.scenarios, &copy.output.shell_layer_name);
         state.scenarios.insert(position + 1, copy);
@@ -157,6 +168,7 @@ impl<'a> App<'a> {
         let taken = |name: &str| state.scenarios.iter().any(|scenario| scenario.name.eq_ignore_ascii_case(name));
         copy.name = if taken(&wanted) { scenario_copy_name(&state.scenarios, &wanted) } else { wanted };
         copy.id = state.fresh_id();
+        state.refresh_schedule_ids(&mut copy);
         copy.output.shell_layer_name = copy_prefix(&state.scenarios, &copy.output.shell_layer_name);
         copy.output.mode = ShellMode::Multiple;
         copy.output.factor_input = FactorInput::List;
@@ -202,7 +214,7 @@ impl<'a> App<'a> {
 
     /// Hand the scenarios to the active project, which then reads as unsaved
     /// until the project itself is saved.
-    fn write_optimization_scenarios(&mut self) -> Result<()> {
+    pub(crate) fn write_optimization_scenarios(&mut self) -> Result<()> {
         let mut file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
         file.report_columns = self.editor.optimization.report_columns.clone();
         let Some(project) = self.workspace.active_project_mut() else {
@@ -272,6 +284,7 @@ impl<'a> App<'a> {
         let state = &mut self.editor.optimization;
         for mut scenario in file.scenarios {
             scenario.id = state.fresh_id();
+            state.refresh_schedule_ids(&mut scenario);
             scenario.name = unique_name(state.scenarios.iter().map(|existing| existing.name.as_str()), &scenario.name);
             state.scenarios.push(scenario);
         }

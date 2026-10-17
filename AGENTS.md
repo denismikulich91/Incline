@@ -22,6 +22,7 @@ Paths relative to `src/`, except `crates/` paths, which are relative to the repo
 | Reusable UI widgets | `ui/widgets/` (`menu.rs` buttons and fields, `collapsible_section.rs`, `data_table.rs`, `toolbar.rs`, `data_grid.rs` editable grid and `value_field.rs` input/constant field, `toast.rs` fading success messages (`EditorState.toasts.push`) - see `.claude/skills/ui-components/SKILL.md`) |
 | Drill & Blast | `model/drill_hole.rs` (patterns, ties, firing times), `model/blast.rs` (charge library, `charge_hole`, `BlastAnalysis`), `app/tie_in.rs`, `app/blast.rs`, `ui/elements/products.rs` (palette, rules, shot summary), `ui/elements/blast.rs` (contours, relief legend, hole card, timeline) |
 | Pit optimization | `.claude/skills/optimization/SKILL.md` (all stages); `model/optimization.rs` (settings), `model/optimization_run/` (values, shells, meshes, `report.rs`), `app/commands/optimization.rs`, `ui/dialogs/optimization.rs`, `ui/dialogs/optimization_results.rs` |
+| NPV scheduling | `.claude/skills/scheduling/SKILL.md` and `.claude/specs/scheduling/` (spec per stage); `model/scheduling.rs`, `app/commands/scheduling.rs`, `ui/dialogs/scheduling.rs` (editor), schedule rows in `ui/dialogs/optimization.rs` |
 | Translations | `src/i18n.rs` (`tr!` macro, loader), `i18n/en/incline_design.ftl` |
 | Web shell | `web/` (`index.html`, `web-initializer.js`, `_headers`), built by Trunk via `Trunk.toml` |
 

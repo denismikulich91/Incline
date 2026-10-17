@@ -15,6 +15,7 @@ pub(crate) mod raster; // Handles georeferenced image textures.
 pub(crate) mod rename; // Handles renaming layers and project items.
 pub(crate) mod residency;
 pub(crate) mod scene_selection; // What the selection-driven tools take from the scene selection.
+pub(crate) mod scheduling; // Handles the schedules under optimization scenarios.
 pub(crate) mod section; // Handles the explorer headings' bulk show/hide/lock actions.
 pub(crate) mod slice; // Handles the vertical slice view mode.
 mod survey; // Handles saved mine grids and transformations of project data.
@@ -764,6 +765,24 @@ impl<'a> App<'a> {
             }
             UiCommand::CancelOptimizationScenario(id) => {
                 self.cancel_optimization_scenario(id);
+                Ok(())
+            }
+            UiCommand::AddSchedule(parent) => {
+                self.add_schedule(parent);
+                Ok(())
+            }
+            UiCommand::EditSchedule { parent, id } => {
+                self.edit_schedule(parent, id);
+                Ok(())
+            }
+            UiCommand::SaveSchedule { parent, schedule, then_close } => self.save_schedule(parent, *schedule, then_close),
+            UiCommand::DeleteSchedule { parent, id } => self.delete_schedule(parent, id),
+            UiCommand::DuplicateSchedule { parent, id } => self.duplicate_schedule(parent, id),
+            UiCommand::RenameSchedule { parent, id, name } => self.rename_schedule(parent, id, name),
+            UiCommand::MoveSchedule { id, from, to } => self.move_schedule(id, from, to, false),
+            UiCommand::CopyScheduleTo { id, from, to } => self.move_schedule(id, from, to, true),
+            UiCommand::RunSchedule { parent, id } => {
+                self.run_schedule(parent, id);
                 Ok(())
             }
             UiCommand::OpenCreateBlockModel => {
