@@ -102,15 +102,13 @@ impl PeriodCase {
     }
 }
 
-/// Tonnes a processing method may take per period. A minimum of 0 is none.
+/// Tonnes a processing method may take per period.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub(crate) struct ProcessLimit {
     /// The method's name, as the scenario's methods grid (and the report) names it.
     pub(crate) method: String,
     pub(crate) max_tonnes: Capacity,
-    /// 0 for no minimum.
-    pub(crate) min_tonnes: FieldValue<f64>,
 }
 
 /// How much of an element may be sold per period, in the element's sales
@@ -250,11 +248,6 @@ pub(crate) struct Schedule {
     // Capacities
     /// Tonnes mined per period, ore and waste.
     pub(crate) mining_capacity: Capacity,
-    pub(crate) use_mining_min: bool,
-    pub(crate) mining_min: FieldValue<f64>,
-    /// Limit the benches a pushback may advance per period.
-    pub(crate) use_sink_rate: bool,
-    pub(crate) sink_rate: FieldValue<f64>,
     pub(crate) process_limits: Vec<ProcessLimit>,
     /// Every method together.
     pub(crate) total_process_limit: Capacity,
@@ -299,10 +292,6 @@ impl Schedule {
             max_periods: 50,
             discount_rate: FieldValue::new(10.0),
             mining_capacity: Capacity::default(),
-            use_mining_min: false,
-            mining_min: FieldValue::new(0.0),
-            use_sink_rate: false,
-            sink_rate: FieldValue::new(10.0),
             process_limits: Vec::new(),
             total_process_limit: Capacity::default(),
             sell_limits: Vec::new(),
@@ -380,15 +369,6 @@ impl Schedule {
                 Some(_) => {}
             };
             amount(&self.discount_rate, tr!("sched-discount-rate"));
-            if self.use_mining_min {
-                amount(&self.mining_min, tr!("sched-mining-min"));
-            }
-            if self.use_sink_rate {
-                amount(&self.sink_rate, tr!("sched-sink-rate"));
-            }
-            for limit in &self.process_limits {
-                amount(&limit.min_tonnes, limit.method.clone());
-            }
             for stockpile in &self.stockpiles {
                 amount(&stockpile.min_grade, stockpile.name.clone());
                 amount(&stockpile.initial_tonnes, stockpile.name.clone());
@@ -566,6 +546,131 @@ impl Schedule {
             return Err(tr!("sched-period-field-taken", field = name.to_owned()));
         }
         Ok(Some(name.to_owned()))
+    }
+}
+
+/// A capacity per period as a run uses it: `None` has no limit.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PeriodLimit(Option<Vec<f64>>);
+
+impl PeriodLimit {
+    pub(crate) const NONE: Self = Self(None);
+
+    /// The limit in `period` (1-based), never below 0; infinite without one.
+    pub(crate) fn at(&self, period: u32) -> f64 {
+        match &self.0 {
+            None => f64::INFINITY,
+            Some(amounts) => amounts.get(period as usize - 1).or(amounts.last()).copied().unwrap_or(0.0).max(0.0),
+        }
+    }
+}
+
+/// A stockpile with its amounts resolved.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ResolvedStockpile {
+    pub(crate) name: String,
+    pub(crate) feeds: Vec<String>,
+    /// Infinite without a limit.
+    pub(crate) capacity: f64,
+    pub(crate) min_grade: f64,
+    pub(crate) rehandle_cost: f64,
+    pub(crate) initial_tonnes: f64,
+    pub(crate) initial_grade: f64,
+}
+
+/// A schedule as a run reads it: constants resolved, and every capacity per
+/// period with the events' changes added from their period on.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ResolvedSchedule {
+    /// The chosen revenue factors, or `None` for every shell.
+    pub(crate) pushback_factors: Option<Vec<f64>>,
+    pub(crate) lead: u32,
+    pub(crate) max_periods: u32,
+    /// Discount rate as a fraction per period.
+    pub(crate) rate: f64,
+    pub(crate) mining: PeriodLimit,
+    /// By method name; a method without a row has no limit.
+    pub(crate) methods: Vec<(String, PeriodLimit)>,
+    pub(crate) total: PeriodLimit,
+    /// By element name; an element without a row has no limit.
+    pub(crate) selling: Vec<(String, PeriodLimit)>,
+    pub(crate) stockpiles: Vec<ResolvedStockpile>,
+    pub(crate) capex_initial: f64,
+    pub(crate) fixed_cost: f64,
+    /// Capital of the events per period: `capex[0]` is period 1's.
+    pub(crate) capex: Vec<f64>,
+}
+
+impl ResolvedSchedule {
+    pub(crate) fn capex_in(&self, period: u32) -> f64 {
+        self.capex.get(period as usize - 1).copied().unwrap_or(0.0)
+    }
+}
+
+impl Schedule {
+    /// The settings resolved against `parent`'s constants. Meant for a
+    /// schedule without [issues](Self::issues): anything unresolved counts 0.
+    pub(crate) fn resolve(&self, parent: &OptimizationScenario) -> ResolvedSchedule {
+        let constants = &parent.constants;
+        let amount = |value: &FieldValue<f64>| value.resolve(constants).filter(|number| number.is_finite()).unwrap_or(0.0);
+        let periods = self.max_periods as usize;
+        let limit = |capacity: &Capacity, target: &EventTarget| -> PeriodLimit {
+            if !capacity.limited {
+                return PeriodLimit::NONE;
+            }
+            let mut amounts = vec![amount(&capacity.amount); periods];
+            for event in self.events.iter().filter(|event| event.target == *target && event.period >= 1) {
+                let delta = amount(&event.delta);
+                for value in amounts.iter_mut().skip(event.period as usize - 1) {
+                    *value += delta;
+                }
+            }
+            PeriodLimit(Some(amounts))
+        };
+        let mut capex = vec![0.0; periods];
+        for event in &self.events {
+            if (1..=self.max_periods).contains(&event.period) {
+                capex[event.period as usize - 1] += amount(&event.capex);
+            }
+        }
+        ResolvedSchedule {
+            pushback_factors: (self.pushbacks == PushbackChoice::Factors).then(|| self.pushback_factors.clone()),
+            lead: self.lead_benches,
+            max_periods: self.max_periods,
+            rate: amount(&self.discount_rate) / 100.0,
+            mining: limit(&self.mining_capacity, &EventTarget::Mining),
+            methods: self
+                .process_limits
+                .iter()
+                .map(|row| (row.method.clone(), limit(&row.max_tonnes, &EventTarget::Method(row.method.clone()))))
+                .collect(),
+            total: limit(&self.total_process_limit, &EventTarget::TotalProcess),
+            selling: self
+                .sell_limits
+                .iter()
+                .map(|row| (row.element.clone(), limit(&row.max_sold, &EventTarget::Selling(row.element.clone()))))
+                .collect(),
+            stockpiles: self
+                .stockpiles
+                .iter()
+                .map(|stockpile| ResolvedStockpile {
+                    name: stockpile.name.clone(),
+                    feeds: stockpile.feeds.clone(),
+                    capacity: if stockpile.capacity.limited {
+                        amount(&stockpile.capacity.amount)
+                    } else {
+                        f64::INFINITY
+                    },
+                    min_grade: amount(&stockpile.min_grade),
+                    rehandle_cost: amount(&stockpile.rehandle_cost),
+                    initial_tonnes: amount(&stockpile.initial_tonnes),
+                    initial_grade: amount(&stockpile.initial_grade),
+                })
+                .collect(),
+            capex_initial: amount(&self.capex_initial),
+            fixed_cost: amount(&self.fixed_cost),
+            capex,
+        }
     }
 }
 

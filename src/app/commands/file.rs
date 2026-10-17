@@ -1967,6 +1967,8 @@ impl<'a> App<'a> {
     /// Save the project when its stored copy is missing or out of date.
     /// Returns false when Save As is still pending for a never-saved project.
     pub(crate) fn save_dirty_project(&mut self) -> Result<bool> {
+        // The playback deck's column is not the project's: never saved.
+        self.close_field_animation();
         if self.has_pending_move_delta() {
             self.commit_pending_move();
         }
@@ -2171,6 +2173,8 @@ impl<'a> App<'a> {
     }
 
     pub(crate) fn save_project(&mut self, runtime_id: u32) -> Result<()> {
+        // The playback deck's column is not the project's: never saved.
+        self.close_field_animation();
         #[cfg(not(target_arch = "wasm32"))]
         if self.project_revert_is_pending(runtime_id) {
             anyhow::bail!("Wait for the project revert to finish before saving");
@@ -2685,7 +2689,8 @@ impl<'a> App<'a> {
             // a folder deleted since the last save must stay gone even
             // though the file on disk still names it.
             design.folders = live_folders;
-            let scenarios_json = |file: &crate::model::optimization::ScenarioFile| serde_json::to_string(&(&file.scenarios, &file.report_columns)).unwrap_or_default();
+            let scenarios_json =
+                |file: &crate::model::optimization::ScenarioFile| serde_json::to_string(&(&file.scenarios, &file.report_columns, &file.animation_speed)).unwrap_or_default();
             let optimization_diverges = scenarios_json(&live_optimization) != scenarios_json(&bundle.optimization.unwrap_or_default());
             design.optimization = live_optimization;
             let folder_map = reloaded_folder_map(&design.folders, &bundle.folders);

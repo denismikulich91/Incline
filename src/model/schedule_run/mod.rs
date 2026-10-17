@@ -1,0 +1,435 @@
+//! Running a schedule (stage 2): from a scenario's run to the NPV of every
+//! candidate pit, scheduled three ways.
+//!
+//! The scenario's run keeps only its grid and each cell's shell, so the job
+//! values the cells again ([`values`](crate::model::optimization_run::values),
+//! without the solver) and lays them into panels ([`panels`]): what each
+//! shell holds on each bench. Every shell is then a candidate final pit,
+//! mined in the worst, best and fixed-lead orders ([`sequence`]) and
+//! simulated period by period ([`simulate`]). See
+//! `.claude/specs/scheduling/stage-2-engine.md`.
+
+pub(crate) mod panels;
+pub(crate) mod sequence;
+pub(crate) mod simulate;
+
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
+
+use anyhow::{Result, bail};
+use rayon::prelude::*;
+
+use self::{
+    panels::{ELEMENT_GRADE_TONNES, ELEMENT_RECOVERED, Layout, Panels, Slot, add_panels},
+    simulate::{Context, Limits, PitSchedule, simulate},
+};
+use crate::{
+    app::jobs::CancelFlag,
+    i18n::tr,
+    model::{
+        optimization::round_factor,
+        optimization_run::{
+            RunResult, ShellField,
+            grid::{BlockLayout, NO_BLOCK},
+            prepare::{Air, Economics, Prepared},
+            report::{self, ElementInfo, ShellInfo},
+            shells::OUTSIDE,
+            values,
+        },
+        progress::Progress,
+        scheduling::{PeriodCase, PeriodLimit, ResolvedSchedule},
+    },
+};
+
+/// Everything a schedule run needs, owned so it can go to a worker.
+pub(crate) struct ScheduleInput {
+    pub(crate) prepared: Prepared,
+    pub(crate) layout: BlockLayout,
+    /// The scenario's run being scheduled.
+    pub(crate) run: Arc<RunResult>,
+    pub(crate) settings: ResolvedSchedule,
+    /// The case whose mining order is kept (for the period field and the
+    /// animation), at the pit where its NPV peaks.
+    pub(crate) case: PeriodCase,
+    /// Make the period field too.
+    pub(crate) write_field: bool,
+}
+
+/// [`MiningOrder::block_order`] of air and of blocks on no cell of the grid.
+pub(crate) const ORDER_AIR: u32 = 0;
+/// [`MiningOrder::block_order`] of rock outside the pit: the ground around it.
+pub(crate) const ORDER_GROUND: u32 = u32::MAX;
+
+/// One step of a mining order: one pushback's bench.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct OrderStep {
+    /// 1-based.
+    pub(crate) pushback: usize,
+    /// Elevation of the bench's middle.
+    pub(crate) elevation: f64,
+    /// The period mining the middle tonne of the panel.
+    pub(crate) period: u32,
+}
+
+/// How one pit is mined in one case: what the period field and the
+/// animation read. Small - a few entries per pushback bench - because a
+/// block's step follows from its cell's shell and bench, which the
+/// scenario's run holds ([`Self::block_order`]).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MiningOrder {
+    pub(crate) case: PeriodCase,
+    /// 0-based.
+    pub(crate) pit: usize,
+    pub(crate) steps: Vec<OrderStep>,
+    /// The step (1-based, into `steps`) of each (0-based pushback, bench).
+    step_of: HashMap<(usize, u32), u32>,
+    /// Per shell of the pit (0-based), its pushback.
+    pushback_of_shell: Vec<usize>,
+}
+
+impl MiningOrder {
+    /// Per block its step (1-based), or [`ORDER_AIR`] or [`ORDER_GROUND`]:
+    /// built from `run`'s shell and air per cell, with `block_of_cell` of
+    /// the block model on `run`'s grid.
+    pub(crate) fn block_order(&self, run: &RunResult, block_of_cell: &[u32], blocks: usize) -> Vec<u32> {
+        let grid = &run.grid;
+        let top = grid.dims[2] - 1;
+        let layer = grid.column_count();
+        let mut order = vec![ORDER_AIR; blocks];
+        for (cell, &block) in block_of_cell.iter().enumerate() {
+            if block == NO_BLOCK || run.air.get(cell) {
+                continue;
+            }
+            let shell = run.shells.label[cell];
+            order[block as usize] = if shell == OUTSIDE || usize::from(shell) > self.pit + 1 {
+                ORDER_GROUND
+            } else {
+                let bench = (top - cell / layer) as u32;
+                self.step_of.get(&(self.pushback_of_shell[usize::from(shell) - 1], bench)).copied().unwrap_or(ORDER_GROUND)
+            };
+        }
+        order
+    }
+
+    /// The categorical period field: per block its step's period, blank for
+    /// air and ground.
+    pub(crate) fn period_field(&self, block_order: &[u32]) -> ShellField {
+        let mut categories = BTreeMap::new();
+        let codes = block_order
+            .iter()
+            .map(|&order| match order {
+                ORDER_AIR | ORDER_GROUND => f64::NAN,
+                step => match self.steps[step as usize - 1].period {
+                    0 => f64::NAN,
+                    period => {
+                        categories.entry(period).or_insert_with(|| period.to_string());
+                        f64::from(period)
+                    }
+                },
+            })
+            .collect();
+        ShellField {
+            codes: Arc::new(codes),
+            categories,
+        }
+    }
+}
+
+/// One shell as the final pit, scheduled three ways.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CandidatePit {
+    pub(crate) worst: PitSchedule,
+    pub(crate) best: PitSchedule,
+    pub(crate) lead: PitSchedule,
+}
+
+impl CandidatePit {
+    pub(crate) fn case(&self, case: PeriodCase) -> &PitSchedule {
+        match case {
+            PeriodCase::FixedLead => &self.lead,
+            PeriodCase::Best => &self.best,
+            PeriodCase::Worst => &self.worst,
+        }
+    }
+}
+
+/// What a schedule run found, kept for the session (stage 3 reads it).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScheduleResult {
+    pub(crate) shells: Vec<ShellInfo>,
+    /// As the scenario's report: waste, then each method.
+    pub(crate) destinations: Vec<String>,
+    pub(crate) elements: Vec<ElementInfo>,
+    pub(crate) stockpiles: Vec<String>,
+    /// Per shell of the run (0-based), that shell as the final pit.
+    pub(crate) pits: Vec<CandidatePit>,
+    /// The kept case's mining order at its peak pit, when a pit of it is
+    /// mined out.
+    pub(crate) order: Option<MiningOrder>,
+}
+
+impl ScheduleResult {
+    /// The pit (0-based) where `case`'s NPV peaks, among those mined out.
+    pub(crate) fn peak(&self, case: PeriodCase) -> Option<usize> {
+        self.pits
+            .iter()
+            .enumerate()
+            .filter(|(_, pit)| !pit.case(case).unfinished)
+            .max_by(|a, b| a.1.case(case).npv.total_cmp(&b.1.case(case).npv))
+            .map(|(index, _)| index)
+    }
+}
+
+/// A finished schedule run.
+pub(crate) struct ScheduleOutcome {
+    pub(crate) result: ScheduleResult,
+    /// The periods to write into the block model: per block the period its
+    /// panel is mined in.
+    pub(crate) field: Option<ShellField>,
+}
+
+pub(crate) fn run(input: ScheduleInput, cancel: &CancelFlag, progress: &Progress) -> Result<ScheduleOutcome> {
+    let ScheduleInput {
+        prepared,
+        layout,
+        run,
+        settings,
+        case,
+        write_field,
+    } = input;
+    let economics = &prepared.economics;
+    let grid = layout.grid;
+    if grid != run.grid {
+        bail!("{}", tr!("sched-run-grid-changed"));
+    }
+    let block_of_cell = layout.block_of_cell(cancel)?;
+    progress.set_fraction(0.05);
+    let heights = match &economics.air {
+        Air::Topography(surface) => Some(surface.column_heights(&grid)),
+        _ => None,
+    };
+    let values = values::compute(economics, &grid, &block_of_cell, heights.as_deref(), cancel)?;
+    progress.set_fraction(0.15);
+
+    let (destinations, method_destination) = report::destinations(economics);
+    let parcels = Layout::new(&destinations, method_destination, economics.elements.len(), &settings.stockpiles);
+    let shell_count = run.shells.summaries.len();
+    let shell_panels = panels::build(economics, &grid, &block_of_cell, &values, &run.shells, &parcels, cancel)?;
+    progress.set_fraction(0.25);
+
+    let named = |rows: &[(String, PeriodLimit)], name: &str| rows.iter().find(|(row, _)| row == name).map_or(PeriodLimit::NONE, |(_, limit)| limit.clone());
+    let limits = Limits {
+        mining: settings.mining.clone(),
+        methods: destinations
+            .iter()
+            .enumerate()
+            .map(|(destination, name)| if destination == 0 { PeriodLimit::NONE } else { named(&settings.methods, name) })
+            .collect(),
+        total: settings.total.clone(),
+        selling: economics.elements.iter().map(|element| named(&settings.selling, &element.name)).collect(),
+    };
+    let lots = initial_lots(economics, &destinations, &settings, &parcels)?;
+    let context = Context::new(&parcels, &limits, &settings, &destinations, &lots);
+    let pushbacks = Pushbacks::new(&settings, &run.report.shells, &shell_panels);
+
+    // Pits in batches: each batch's whole pits are summed in turn (each adds
+    // one shell), then scheduled side by side.
+    let batch_size = rayon::current_num_threads().max(1) * 2;
+    let mut pits: Vec<CandidatePit> = Vec::with_capacity(shell_count);
+    let mut whole = Panels::new();
+    let mut tail = Panels::new();
+    let mut next = 0;
+    while next < shell_count {
+        let mut batch: Vec<(usize, Panels, Panels)> = Vec::with_capacity(batch_size);
+        while batch.len() < batch_size && next < shell_count {
+            add_panels(&mut whole, &shell_panels[next]);
+            add_panels(&mut tail, &shell_panels[next]);
+            batch.push((next, whole.clone(), tail.clone()));
+            if pushbacks.ends[next] {
+                tail.clear();
+            }
+            next += 1;
+        }
+        if cancel.is_cancelled() {
+            bail!("Cancelled");
+        }
+        let scheduled: Vec<CandidatePit> = batch
+            .par_iter()
+            .map(|(pit, whole, tail)| {
+                let worst = [whole];
+                let best: Vec<&Panels> = shell_panels[..=*pit].iter().collect();
+                let lead = pushbacks.lead(*pit, tail);
+                CandidatePit {
+                    worst: simulate(&context, &worst, &sequence::order(&worst, Some(0)), None),
+                    best: simulate(&context, &best, &sequence::order(&best, None), None),
+                    lead: simulate(&context, &lead, &sequence::order(&lead, Some(settings.lead)), None),
+                }
+            })
+            .collect();
+        pits.extend(scheduled);
+        progress.set_fraction(0.25 + 0.7 * next as f32 / shell_count.max(1) as f32);
+    }
+
+    let mut result = ScheduleResult {
+        shells: run.report.shells.clone(),
+        destinations,
+        elements: run.report.elements.clone(),
+        stockpiles: settings.stockpiles.iter().map(|stockpile| stockpile.name.clone()).collect(),
+        pits,
+        order: None,
+    };
+    if let Some(pit) = result.peak(case) {
+        // The pit's pushbacks in this case, and each shell's pushback.
+        let mut pushback_of_shell = vec![0usize; pit + 1];
+        let mut owned = Panels::new();
+        match case {
+            PeriodCase::Worst => shell_panels[..=pit].iter().for_each(|panels| add_panels(&mut owned, panels)),
+            PeriodCase::Best => pushback_of_shell.iter_mut().enumerate().for_each(|(shell, pushback)| *pushback = shell),
+            PeriodCase::FixedLead if pushbacks.every_shell => pushback_of_shell.iter_mut().enumerate().for_each(|(shell, pushback)| *pushback = shell),
+            PeriodCase::FixedLead => {
+                let mut pushback = 0;
+                for shell in 0..=pit {
+                    pushback_of_shell[shell] = pushback;
+                    add_panels(&mut owned, &shell_panels[shell]);
+                    if pushbacks.ends[shell] && shell < pit {
+                        pushback += 1;
+                        owned.clear();
+                    }
+                }
+            }
+        }
+        let (list, lead): (Vec<&Panels>, Option<u32>) = match case {
+            PeriodCase::Worst => (vec![&owned], Some(0)),
+            PeriodCase::Best => (shell_panels[..=pit].iter().collect(), None),
+            PeriodCase::FixedLead => (pushbacks.lead(pit, &owned), Some(settings.lead)),
+        };
+        let steps = sequence::order(&list, lead);
+        let mut periods = vec![0u32; steps.len()];
+        simulate(&context, &list, &steps, Some(&mut periods));
+        let top = grid.dims[2] - 1;
+        let step_of: HashMap<(usize, u32), u32> = steps
+            .iter()
+            .enumerate()
+            .map(|(index, step)| ((step.pushback, list[step.pushback][step.panel].0), index as u32 + 1))
+            .collect();
+        let order_steps = steps
+            .iter()
+            .zip(&periods)
+            .map(|(step, &period)| {
+                let bench = list[step.pushback][step.panel].0 as usize;
+                OrderStep {
+                    pushback: step.pushback + 1,
+                    elevation: grid.origin.z + grid.cell.z * ((top - bench) as f64 + 0.5),
+                    period,
+                }
+            })
+            .collect();
+        result.order = Some(MiningOrder {
+            case,
+            pit,
+            steps: order_steps,
+            step_of,
+            pushback_of_shell,
+        });
+    }
+    let field = write_field
+        .then(|| {
+            result
+                .order
+                .as_ref()
+                .map(|order| order.period_field(&order.block_order(&run, &block_of_cell, layout.blocks.len())))
+        })
+        .flatten();
+    progress.set_fraction(1.0);
+    Ok(ScheduleOutcome { result, field })
+}
+
+/// The fixed-lead pushbacks: which shells end one.
+struct Pushbacks<'a> {
+    shell_panels: &'a [Panels],
+    /// Per shell, whether a pushback ends at it.
+    ends: Vec<bool>,
+    /// Every shell its own pushback.
+    every_shell: bool,
+    /// The chosen pushbacks, by the shell they end at.
+    chosen: Vec<(usize, Panels)>,
+}
+
+impl<'a> Pushbacks<'a> {
+    /// With chosen factors, each ends at the outermost shell of its factor.
+    fn new(settings: &ResolvedSchedule, shells: &[ShellInfo], shell_panels: &'a [Panels]) -> Self {
+        let mut ends = vec![settings.pushback_factors.is_none(); shells.len()];
+        if let Some(factors) = &settings.pushback_factors {
+            for factor in factors {
+                if let Some(last) = shells.iter().rposition(|shell| round_factor(shell.factor) == round_factor(*factor)) {
+                    ends[last] = true;
+                }
+            }
+        }
+        let every_shell = settings.pushback_factors.is_none();
+        let mut chosen = Vec::new();
+        if !every_shell {
+            let mut tail = Panels::new();
+            for (shell, panels) in shell_panels.iter().enumerate() {
+                add_panels(&mut tail, panels);
+                if ends[shell] {
+                    chosen.push((shell, std::mem::take(&mut tail)));
+                }
+            }
+        }
+        Self {
+            shell_panels,
+            ends,
+            every_shell,
+            chosen,
+        }
+    }
+
+    /// Pit `pit`'s pushbacks: the chosen ones inside it, then `tail` (what
+    /// it holds beyond the last of them).
+    fn lead<'b>(&'b self, pit: usize, tail: &'b Panels) -> Vec<&'b Panels> {
+        if self.every_shell {
+            return self.shell_panels[..=pit].iter().collect();
+        }
+        let mut list: Vec<&Panels> = self.chosen.iter().filter(|(end, _)| *end < pit).map(|(_, panels)| panels).collect();
+        list.push(tail);
+        list
+    }
+}
+
+/// Each stockpile's opening tonnes as a lot of its first fed method, valued
+/// with that method's main-quality element only; their mining is already paid.
+fn initial_lots(economics: &Economics, destinations: &[String], settings: &ResolvedSchedule, layout: &Layout) -> Result<Vec<Vec<f64>>> {
+    let stride = layout.stride;
+    let mut lots = Vec::with_capacity(settings.stockpiles.len());
+    for stockpile in &settings.stockpiles {
+        let mut lot = vec![0.0; destinations.len() * stride];
+        let tonnes = stockpile.initial_tonnes;
+        if let Some(feed) = stockpile.feeds.first()
+            && tonnes > 0.0
+        {
+            let grade = stockpile.initial_grade;
+            let Some(destination) = destinations.iter().position(|name| name == feed) else {
+                bail!("{}", tr!("sched-run-initial-grade", stockpile = stockpile.name.clone(), method = feed.clone()));
+            };
+            let Some(method) = economics.methods.iter().find(|method| method.name == *feed && grade >= method.min && grade < method.max) else {
+                bail!("{}", tr!("sched-run-initial-grade", stockpile = stockpile.name.clone(), method = feed.clone()));
+            };
+            let values = &mut lot[destination * stride..(destination + 1) * stride];
+            values[Slot::Tonnes as usize] = tonnes;
+            values[layout.element_at(0, 0, ELEMENT_GRADE_TONNES)] = tonnes * grade;
+            let mut cost = tonnes * (method.processing + method.ga);
+            for element in method.elements.iter().filter(|element| element.index == 0) {
+                let recovered = tonnes * (grade - element.threshold).max(0.0) * element.factor * element.recovery;
+                values[layout.element_at(0, 0, ELEMENT_RECOVERED)] += recovered;
+                values[Slot::Revenue as usize] += recovered * element.net_price;
+                cost += tonnes * grade * element.factor * element.cost;
+            }
+            values[Slot::ProcessCost as usize] = cost;
+        }
+        lots.push(lot);
+    }
+    Ok(lots)
+}

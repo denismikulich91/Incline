@@ -30,6 +30,7 @@ pub(crate) mod point_features;
 pub(crate) mod progress;
 pub(crate) mod project;
 pub(crate) mod raster;
+pub(crate) mod schedule_run;
 pub(crate) mod scheduling;
 pub(crate) mod spatial;
 pub(crate) mod survey;

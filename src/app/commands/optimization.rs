@@ -127,6 +127,7 @@ impl<'a> App<'a> {
             for schedule in &scenario.schedules {
                 state.schedule_runs.remove(&schedule.id);
                 state.schedule_summaries.remove(&schedule.id);
+                state.schedule_results.remove(&schedule.id);
             }
         }
         state.scenarios.retain(|scenario| scenario.id != id);
@@ -210,6 +211,7 @@ impl<'a> App<'a> {
         }
         self.editor.optimization.scenarios = file.scenarios;
         self.editor.optimization.report_columns = file.report_columns;
+        self.editor.optimization.animation_speed = file.animation_speed;
     }
 
     /// Hand the scenarios to the active project, which then reads as unsaved
@@ -217,6 +219,7 @@ impl<'a> App<'a> {
     pub(crate) fn write_optimization_scenarios(&mut self) -> Result<()> {
         let mut file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
         file.report_columns = self.editor.optimization.report_columns.clone();
+        file.animation_speed = self.editor.optimization.animation_speed;
         let Some(project) = self.workspace.active_project_mut() else {
             anyhow::bail!("{}", tr!("opt-scenarios-save-failed", error = tr!("opt-scenarios-no-project")));
         };
@@ -455,6 +458,7 @@ impl<'a> App<'a> {
         {
             userspace_log!("{}", tr!("opt-run-cancelled", name = scenario.name.clone()));
         }
+        self.after_scenario_run(id, false);
         self.start_queued_optimization_runs();
     }
 
@@ -495,6 +499,20 @@ impl<'a> App<'a> {
             })
             .map(|(id, _)| *id)
             .collect();
+        let lost_schedules: Vec<u64> = self
+            .editor
+            .optimization
+            .schedule_runs
+            .iter()
+            .filter(|(id, run)| {
+                matches!(run, RunState::Running { .. }) && !self.job_pending(&JobKey::ScheduleRun(**id)) && !(restoring && self.editor.optimization.awaiting_restore.contains(id))
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in lost_schedules {
+            self.editor.optimization.schedule_runs.remove(&id);
+            self.editor.optimization.awaiting_restore.remove(&id);
+        }
         if lost.is_empty() {
             return;
         }
@@ -512,6 +530,7 @@ impl<'a> App<'a> {
         }
         self.editor.optimization.runs.remove(&id);
         self.editor.optimization.awaiting_restore.remove(&id);
+        self.after_scenario_run(id, false);
         self.start_queued_optimization_runs();
     }
 
@@ -529,7 +548,7 @@ impl<'a> App<'a> {
     }
 
     /// The block model and air topography `scenario` needs that are unloaded.
-    fn unloaded_optimization_inputs(&self, scenario: &OptimizationScenario) -> Vec<(ItemRef, String)> {
+    pub(super) fn unloaded_optimization_inputs(&self, scenario: &OptimizationScenario) -> Vec<(ItemRef, String)> {
         let model = self
             .block_models
             .iter()
@@ -581,12 +600,19 @@ impl<'a> App<'a> {
         }
         let items: Vec<ItemRef> = items.into_iter().map(|(item, _)| item).collect();
         // Runs show as running while their inputs load.
-        if let LoadThen::Run(ids) = &then {
-            let state = &mut self.editor.optimization;
-            for id in ids {
-                state.runs.insert(*id, RunState::Running { progress: Progress::new() });
+        let state = &mut self.editor.optimization;
+        match &then {
+            LoadThen::Run(ids) => {
+                for id in ids {
+                    state.runs.insert(*id, RunState::Running { progress: Progress::new() });
+                    state.awaiting_restore.insert(*id);
+                }
+            }
+            LoadThen::Schedule { id, .. } => {
+                state.schedule_runs.insert(*id, RunState::Running { progress: Progress::new() });
                 state.awaiting_restore.insert(*id);
             }
+            LoadThen::Pick => {}
         }
         let deferred = self.restore_items_for(items.clone(), {
             let (items, then) = (items.clone(), then.clone());
@@ -615,8 +641,41 @@ impl<'a> App<'a> {
                     }
                 }
             }
+            LoadThen::Schedule { parent, id } => {
+                let state = &mut self.editor.optimization;
+                if state.awaiting_restore.remove(&id) {
+                    state.schedule_runs.remove(&id);
+                    self.run_schedule(parent, id);
+                }
+            }
             LoadThen::Pick => self.begin_shell_start_pick(),
         }
+    }
+
+    /// What a run of `scenario` reads, prepared: its economics resolved on
+    /// the block model (and air topography), and the blocks laid on the grid.
+    /// The scenario's run and its schedules' runs both start from here.
+    pub(super) fn prepare_scenario_inputs(&self, scenario: &OptimizationScenario) -> Result<(prepare::Prepared, BlockLayout, BlockModelId), Vec<String>> {
+        let Some(model) = self.block_models.iter().find(|model| model.name == scenario.block_model) else {
+            return Err(vec![tr!("opt-run-needs-block-model", name = scenario.name.clone(), model = scenario.block_model.clone())]);
+        };
+        if let Some(issue) = GridIssue::of(model) {
+            return Err(vec![issue.message()]);
+        }
+        let topography = (scenario.exclude_air && scenario.air_mode == AirMode::Topography)
+            .then(|| self.triangulations.iter().find(|item| item.name == scenario.air_topography))
+            .flatten()
+            .map(|item| Topography {
+                mesh: Arc::clone(&item.mesh),
+                spatial: Arc::clone(&item.spatial),
+            });
+        let prepared = prepare::prepare(scenario, &model.model, topography)?;
+        let layout = model
+            .uniform_grid
+            .clone()
+            .and_then(|uniform| BlockLayout::new(Arc::clone(&model.blocks), uniform, |local| model.model.local_to_world(local)))
+            .ok_or_else(|| vec![GridIssue::Irregular.message()])?;
+        Ok((prepared, layout, model.id))
     }
 
     /// Everything the scenario needs is in memory: prepare it and spawn the job.
@@ -628,17 +687,6 @@ impl<'a> App<'a> {
             self.fail_optimization_run(id, &scenario.name, &[issue]);
             return;
         };
-        if let Some(issue) = GridIssue::of(model) {
-            self.fail_optimization_run(id, &scenario.name, &[issue.message()]);
-            return;
-        }
-        let topography = (scenario.exclude_air && scenario.air_mode == AirMode::Topography)
-            .then(|| self.triangulations.iter().find(|item| item.name == scenario.air_topography))
-            .flatten()
-            .map(|item| Topography {
-                mesh: Arc::clone(&item.mesh),
-                spatial: Arc::clone(&item.spatial),
-            });
         // Checked before the run, so a field that cannot be written does not
         // cost the run's time first.
         let shell_field = match scenario.shell_field_target(&BlockModelFields::of_open(model)) {
@@ -662,22 +710,13 @@ impl<'a> App<'a> {
             self.fail_optimization_run(id, &scenario.name, &[tr!("opt-run-reports-folder-missing")]);
             return;
         }
-        let prepared = match prepare::prepare(&scenario, &model.model, topography) {
-            Ok(prepared) => prepared,
+        let (prepared, layout, model_id) = match self.prepare_scenario_inputs(&scenario) {
+            Ok(inputs) => inputs,
             Err(issues) => {
                 self.fail_optimization_run(id, &scenario.name, &issues);
                 return;
             }
         };
-        let layout = model
-            .uniform_grid
-            .clone()
-            .and_then(|uniform| BlockLayout::new(Arc::clone(&model.blocks), uniform, |local| model.model.local_to_world(local)));
-        let Some(layout) = layout else {
-            self.fail_optimization_run(id, &scenario.name, &[GridIssue::Irregular.message()]);
-            return;
-        };
-        let model_id = model.id;
         let cells = layout.grid.cell_count();
         let output = &scenario.output;
         let input = RunInput {
@@ -792,11 +831,14 @@ impl<'a> App<'a> {
                         report: Arc::new(outcome.report),
                         grid: outcome.grid,
                         shells: outcome.shells,
+                        air: outcome.air,
                     }),
                 );
+                self.after_scenario_run(id, true);
             }
             Err(error) => {
                 self.editor.optimization.runs.remove(&id);
+                self.after_scenario_run(id, false);
                 if format!("{error:#}").contains("Cancelled") {
                     userspace_log!("{}", tr!("opt-run-cancelled", name = scenario.name.clone()));
                 } else {
@@ -864,7 +906,7 @@ impl<'a> App<'a> {
     /// Write a run's shells into categorical field `field` of block model
     /// `model_id`, adding the field or overwriting it. A block model moved out
     /// of memory since the run is read back first, and leaves again after.
-    fn write_shell_field(&mut self, model_id: BlockModelId, field: String, values: ShellField, colors: HashMap<usize, [f32; 4]>, seed: u64) {
+    pub(super) fn write_shell_field(&mut self, model_id: BlockModelId, field: String, values: ShellField, colors: HashMap<usize, [f32; 4]>, seed: u64) {
         let restoring = self.restore_items_for(vec![ItemRef::BlockModel(model_id)], {
             let (field, values, colors) = (field.clone(), values.clone(), colors.clone());
             move |app| app.apply_shell_field(model_id, &field, values, &colors, seed)
@@ -1041,7 +1083,7 @@ fn folder_name(name: &str) -> String {
 
 /// A random, easily told apart colour for a shell: hues a golden angle apart
 /// from a random start, at a calm saturation.
-fn shell_color(seed: u64, shell: usize) -> [f32; 4] {
+pub(super) fn shell_color(seed: u64, shell: usize) -> [f32; 4] {
     let hue = ((seed % 360) as f32 / 360.0 + shell as f32 * 0.618_034).fract();
     let (saturation, value) = (0.55, 0.85);
     let sector = hue * 6.0;

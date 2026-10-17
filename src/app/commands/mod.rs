@@ -1,6 +1,7 @@
 pub(crate) mod block_model;
 pub(crate) mod drawing; // Handles finishing polylines, creating points, etc commands
 pub(crate) mod drill_hole;
+pub(crate) mod field_animation; // The playback deck: a block model played through in the order of a field.
 pub(crate) mod file; // Handles importing, exportings, etc. commands
 pub(crate) mod folder; // Handles explorer folder create/delete/rename/move commands, for every section
 pub(crate) mod layer; // Handles creating layers, deleting layers, etc. commands
@@ -783,6 +784,18 @@ impl<'a> App<'a> {
             UiCommand::CopyScheduleTo { id, from, to } => self.move_schedule(id, from, to, true),
             UiCommand::RunSchedule { parent, id } => {
                 self.run_schedule(parent, id);
+                Ok(())
+            }
+            UiCommand::PlayScheduleAnimation { parent, id } => {
+                self.play_schedule_animation(parent, id);
+                Ok(())
+            }
+            UiCommand::ApplyFieldAnimation => {
+                self.apply_field_animation();
+                Ok(())
+            }
+            UiCommand::CloseFieldAnimation => {
+                self.close_field_animation();
                 Ok(())
             }
             UiCommand::OpenCreateBlockModel => {

@@ -196,9 +196,9 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                             if ui.add(edit).clicked() {
                                 actions.push(UiCommand::EditOptimizationScenario(scenario.id));
                             }
-                            let add = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "grid_add.svg")), tr!("sched-add"))
-                                .id_salt(("sched_add", scenario.id))
-                                .button_side(ICON_SIDE);
+                            // In the schedules' colour (see `schedule_rows_fill`).
+                            let add_icon = egui::Image::new(egui::include_image!("../../../res/ui/icons_dark/schedule_add.svg")).tint(menu::accent_fill(ui.visuals()));
+                            let add = ToolbarButton::new(add_icon, tr!("sched-add")).id_salt(("sched_add", scenario.id)).button_side(ICON_SIDE);
                             if ui.add(add).clicked() {
                                 actions.push(UiCommand::AddSchedule(scenario.id));
                             }
@@ -229,8 +229,17 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                         });
                     }
                     ui.add_space(2.0);
-                    if expanded {
-                        draw_schedule_rows(ui, state, scenario, &mut actions, commands);
+                    if expanded && !scenario.schedules.is_empty() {
+                        // The children on a faint accent wash, so they read as the scenario's.
+                        egui::Frame::new()
+                            .fill(schedule_rows_fill(ui.visuals()))
+                            .corner_radius(egui::CornerRadius::same(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
+                            .inner_margin(egui::Margin::symmetric(0, 2))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                draw_schedule_rows(ui, state, scenario, &mut actions, commands);
+                            });
+                        ui.add_space(2.0);
                     }
                 }
                 if let Some(id) = toggled
@@ -336,6 +345,12 @@ fn disclosure(ui: &mut egui::Ui, expanded: bool) -> egui::Response {
     response.on_hover_text(if expanded { tr!("sched-hide-schedules") } else { tr!("sched-show-schedules") })
 }
 
+/// The wash behind a scenario's schedules: the accent, faint - a touch
+/// stronger in the dark theme, where a faint tint sinks into the panel.
+fn schedule_rows_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    menu::accent_fill(visuals).gamma_multiply(if visuals.dark_mode { 0.16 } else { 0.10 })
+}
+
 /// A scenario's schedules, one row each under it: a drag grip on the guide
 /// line, the name, the NPV, then the scenario row's icons in the same order.
 fn draw_schedule_rows(ui: &mut egui::Ui, state: &OptimizationState, scenario: &OptimizationScenario, actions: &mut Vec<UiCommand>, commands: &mut Vec<UiCommand>) {
@@ -373,11 +388,27 @@ fn draw_schedule_rows(ui: &mut egui::Ui, state: &OptimizationState, scenario: &O
             response.on_hover_text(tr!("sched-drag-hint"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                let blocked = status == ScheduleStatus::Blocked;
-                let play = ui.add_enabled_ui(!blocked, |ui| play_button(ui, schedule_play_status(status))).inner;
-                let play = if blocked { play.on_disabled_hover_text(tr!("sched-blocked")) } else { play };
+                // Without an up-to-date run of the scenario, Run runs it first.
+                let play = play_button(ui, schedule_play_status(status));
+                let play = if status == ScheduleStatus::Blocked {
+                    play.on_hover_text(tr!("sched-run-parent-first-hint"))
+                } else {
+                    play
+                };
                 if play.clicked() {
                     actions.push(UiCommand::RunSchedule { parent, id: schedule.id });
+                }
+                // The mining played on the block model, from the last run.
+                let playable = status == ScheduleStatus::UpToDate && state.schedule_results.get(&schedule.id).is_some_and(|result| result.order.is_some());
+                let animate = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "schedule_animate.svg")), tr!("sched-anim-button"))
+                    .id_salt(("sched_animate", schedule.id))
+                    .button_side(ICON_SIDE);
+                let animate = ui.add_enabled_ui(playable, |ui| ui.add(animate)).inner;
+                if !playable {
+                    animate.clone().on_disabled_hover_text(tr!("sched-anim-needs-run"));
+                }
+                if animate.clicked() {
+                    actions.push(UiCommand::PlayScheduleAnimation { parent, id: schedule.id });
                 }
                 // Results come with the schedule engine.
                 let results = ToolbarButton::new(
@@ -437,7 +468,7 @@ fn npv_cell(ui: &mut egui::Ui, summary: Option<ScheduleSummary>, highest: bool) 
     match summary {
         Some(summary) => response.on_hover_text(tr!(
             "sched-npv-hover",
-            shell = (summary.best_shell + 1).to_string(),
+            shell = (summary.peak_shell + 1).to_string(),
             lead = format_money(summary.npv_lead),
             best = format_money(summary.npv_best),
             worst = format_money(summary.npv_worst)

@@ -329,31 +329,11 @@ fn draw_capacities(ui: &mut egui::Ui, schedule: &mut Schedule, parent: &Optimiza
             &mut schedule.mining_capacity,
             unit_tonnes(),
         );
-        form_toggle(ui, tr!("sched-use-mining-min"), None, &mut schedule.use_mining_min);
-        if schedule.use_mining_min {
-            form_value(
-                ui,
-                "sched_mining_min",
-                tr!("sched-mining-min"),
-                None,
-                &mut schedule.mining_min,
-                (0.0, f64::MAX),
-                unit_tonnes(),
-            );
-        }
-        form_toggle(ui, tr!("sched-use-sink-rate"), Some(tr!("sched-sink-rate-hint")), &mut schedule.use_sink_rate);
-        if schedule.use_sink_rate {
-            form_value(ui, "sched_sink_rate", tr!("sched-sink-rate"), None, &mut schedule.sink_rate, (0.0, 10_000.0), String::new());
-        }
     });
 
     let mut fill_all = false;
     option_group(ui, tr!("sched-group-processing"), |ui| {
-        let columns = vec![
-            GridColumn::new(tr!("sched-method"), 40.0),
-            GridColumn::new(tr!("sched-col-max"), 30.0),
-            GridColumn::new(tr!("sched-col-min"), 30.0),
-        ];
+        let columns = vec![GridColumn::new(tr!("sched-method"), 50.0), GridColumn::new(tr!("sched-col-max"), 50.0)];
         let rows = plain_rows(schedule.process_limits.len());
         let limits = &mut schedule.process_limits;
         let mut actions = DataGrid::new("sched_process_limits", columns)
@@ -362,15 +342,10 @@ fn draw_capacities(ui: &mut egui::Ui, schedule: &mut Schedule, parent: &Optimiza
                 let Some(limit) = limits.get_mut(row) else {
                     return;
                 };
-                match column {
-                    0 => cell_combo(ui, ("sched_process_method", row), &mut limit.method, &methods, tr!("opt-none-selected"), true),
-                    1 => cell_capacity(ui, ("sched_process_max", row), &mut limit.max_tonnes, unit_tonnes()),
-                    _ => {
-                        ValueField::new(("sched_process_min", row), &mut limit.min_tonnes)
-                            .range(0.0, f64::MAX)
-                            .suffix(unit_tonnes())
-                            .show(ui);
-                    }
+                if column == 0 {
+                    cell_combo(ui, ("sched_process_method", row), &mut limit.method, &methods, tr!("opt-none-selected"), true);
+                } else {
+                    cell_capacity(ui, ("sched_process_max", row), &mut limit.max_tonnes, unit_tonnes());
                 }
             });
         fill_all |= actions.contains(&GridAction::FillAll);

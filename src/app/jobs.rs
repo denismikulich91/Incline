@@ -65,6 +65,8 @@ pub(crate) enum JobKey {
     BlockModel(crate::model::block_model::BlockModelId),
     /// A pit optimization run of the scenario with this id.
     OptimizationRun(u64),
+    /// A run of the schedule with this id.
+    ScheduleRun(u64),
     DrillHole(crate::model::drill_hole::DrillHoleId),
     /// Work on a dataset's linked geophysics files: an index pass, a check
     /// or a hole read. Stale once the dataset's link is taken up again
@@ -245,7 +247,7 @@ impl<'a> App<'a> {
             }
             #[cfg(target_arch = "wasm32")]
             JobKey::BrowserProjectSave { .. } => true,
-            JobKey::OptimizationRun(_) => true,
+            JobKey::OptimizationRun(_) | JobKey::ScheduleRun(_) => true,
             JobKey::Anonymous => true,
         })
     }

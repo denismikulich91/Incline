@@ -672,6 +672,7 @@ fn draw_ui(
     // points the whole round is read from - stay on top of them.
     elements::blast::draw_blast_overlays(root_ui, editor, drill_holes, canvas_rect);
     draw_initiation_cards(root_ui, editor, canvas_rect);
+    elements::field_animation::draw_field_animation(root_ui, editor, canvas_rect, commands);
 
     if let (Some(start), Some(end)) = (editor.selection_box_start_px, editor.selection_box_current_px) {
         // Box selection: left-to-right = cross select (dashed green), right-to-left = window select

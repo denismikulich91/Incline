@@ -13,6 +13,7 @@ pub(crate) mod borehole_inspector;
 pub(crate) mod console;
 pub(crate) mod cursors;
 pub(crate) mod explorer;
+pub(crate) mod field_animation;
 pub(crate) mod main_menu;
 pub(crate) mod products;
 pub(crate) mod properties;

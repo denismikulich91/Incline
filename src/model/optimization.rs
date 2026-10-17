@@ -1450,6 +1450,10 @@ pub(crate) struct ScenarioFile {
     /// the scenarios, so choosing columns never makes a run look stale.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) report_columns: BTreeMap<String, Vec<String>>,
+    /// The playback deck's speed, in steps (benches) a second, last set in
+    /// this project: one for every schedule's animation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) animation_speed: Option<f64>,
 }
 
 impl ScenarioFile {
@@ -1458,6 +1462,7 @@ impl ScenarioFile {
             version: SCENARIO_FILE_VERSION,
             scenarios,
             report_columns: BTreeMap::new(),
+            animation_speed: None,
         }
     }
 }

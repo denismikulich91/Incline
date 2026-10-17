@@ -1094,12 +1094,14 @@ impl<'value> MenuFieldBool<'value> {
     }
 }
 
-struct SlidingToggle<'value> {
+/// The on/off switch of [`MenuFieldBool`], for a bool shown without a
+/// field row (a deck, a toolbar).
+pub(crate) struct SlidingToggle<'value> {
     value: &'value mut bool,
 }
 
 impl<'value> SlidingToggle<'value> {
-    fn new(value: &'value mut bool) -> Self {
+    pub(crate) fn new(value: &'value mut bool) -> Self {
         Self { value }
     }
 }

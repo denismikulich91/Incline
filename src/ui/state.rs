@@ -1109,6 +1109,8 @@ pub(crate) struct EditorState {
     /// applied by `App::sync_hidden_handles`, so a rebuild keeps it, and
     /// clearing it brings the saved visibility back.
     pub(crate) isolated_entity: Option<SceneEntityId>,
+    /// The playback deck, when a block model is being played through.
+    pub(crate) field_animation: Option<FieldAnimation>,
     /// Short messages fading out above the status bar (`widgets::toast`).
     pub(crate) toasts: crate::ui::widgets::toast::Toasts,
     /// Entities frozen: still visible, but excluded from editing and snapping.
@@ -2427,6 +2429,7 @@ impl EditorState {
             borehole_inspector_locked: false,
             hidden_handles: HashSet::new(),
             isolated_entity: None,
+            field_animation: None,
             toasts: Default::default(),
             frozen_handles: HashSet::new(),
             explicitly_frozen: HashSet::new(),
@@ -3743,6 +3746,15 @@ pub(crate) enum UiCommand {
         parent: u64,
         id: u64,
     },
+    /// Play a schedule's mining on its block model (the playback deck).
+    PlayScheduleAnimation {
+        parent: u64,
+        id: u64,
+    },
+    /// Show the playback deck's step on the block model.
+    ApplyFieldAnimation,
+    /// Close the playback deck, putting the view back.
+    CloseFieldAnimation,
     OpenCreateBlockModel,
     ExecuteCreateBlockModel {
         drill_hole_id: DrillHoleId,
@@ -4017,6 +4029,9 @@ impl UiCommand {
             | Self::EditSchedule { .. }
             | Self::RenameSchedule { .. }
             | Self::RunSchedule { .. }
+            | Self::PlayScheduleAnimation { .. }
+            | Self::ApplyFieldAnimation
+            | Self::CloseFieldAnimation
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
             | Self::OpenOffsetDialog
@@ -4790,8 +4805,8 @@ pub(crate) enum ScheduleStatus {
 /// list's NPV column. Filled by the scheduling engine (stage 2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ScheduleSummary {
-    /// 0-based shell of the parent's run.
-    pub(crate) best_shell: usize,
+    /// 0-based shell of the parent's run where the fixed-lead NPV peaks.
+    pub(crate) peak_shell: usize,
     pub(crate) npv_best: f64,
     pub(crate) npv_worst: f64,
     pub(crate) npv_lead: f64,
@@ -4874,6 +4889,9 @@ pub(crate) struct OptimizationState {
     /// The Results table's columns per report (scenario name), saved with the
     /// scenarios; a report not in here shows the default columns.
     pub(crate) report_columns: std::collections::BTreeMap<String, Vec<String>>,
+    /// The playback deck's speed last set in this project (steps a second),
+    /// saved with the scenarios.
+    pub(crate) animation_speed: Option<f64>,
     /// Asking whether to load the unloaded inputs a run or pick needs.
     pub(crate) load_prompt: Option<LoadPrompt>,
     /// The schedule editor. Never open with `draft`; the list hides behind either.
@@ -4887,6 +4905,11 @@ pub(crate) struct OptimizationState {
     pub(crate) schedule_runs: HashMap<u64, RunState>,
     /// What each schedule's last run found, by schedule id.
     pub(crate) schedule_summaries: HashMap<u64, ScheduleSummary>,
+    /// Schedules waiting for their scenario's run, by scenario id: run
+    /// asked for one whose scenario had no up-to-date run, so it runs first.
+    pub(crate) schedules_after_run: HashMap<u64, Vec<u64>>,
+    /// Each schedule's last run in full, for the session (stage 3 reads it).
+    pub(crate) schedule_results: HashMap<u64, std::sync::Arc<crate::model::schedule_run::ScheduleResult>>,
 }
 
 /// Inputs of an optimization that are unloaded, and what to do once they are
@@ -4904,6 +4927,8 @@ pub(crate) enum LoadThen {
     Run(Vec<u64>),
     /// Pick the directional shells' starting point.
     Pick,
+    /// Run this schedule of scenario `parent`.
+    Schedule { parent: u64, id: u64 },
 }
 
 /// The Results window: a run's report, charted and tabled.
@@ -4974,6 +4999,60 @@ impl OptimizationState {
     }
 }
 
+/// A block model played through in the order of a field: one step at a
+/// time its blocks of that step vanish (a schedule's mining, bench by bench).
+///
+/// Built for schedules first; meant to become a general command animating
+/// any field by the order of its values (see the `scheduling` skill).
+#[derive(Clone, Debug)]
+pub(crate) struct FieldAnimation {
+    pub(crate) block_model: crate::model::block_model::BlockModelId,
+    /// What is played, for the deck's title.
+    pub(crate) title: String,
+    pub(crate) steps: Vec<AnimationStep>,
+    /// Steps done; fractional while playing.
+    pub(crate) playhead: f64,
+    pub(crate) playing: bool,
+    /// Steps per second.
+    pub(crate) speed: f64,
+    /// Show the blocks around the played ones (the ground) until the end.
+    pub(crate) keep_outer: bool,
+    /// The steps done and `keep_outer` last shown on the model.
+    pub(crate) applied: Option<(usize, bool)>,
+    /// The view to put back on close.
+    pub(crate) restore: AnimationRestore,
+}
+
+impl FieldAnimation {
+    /// Steps shown as done.
+    pub(crate) fn done(&self) -> usize {
+        (self.playhead.floor().max(0.0) as usize).min(self.steps.len())
+    }
+
+    /// Whether the model shows something else than the deck asks.
+    pub(crate) fn stale(&self) -> bool {
+        self.applied != Some((self.done(), self.keep_outer))
+    }
+}
+
+/// One step of a [`FieldAnimation`].
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AnimationStep {
+    pub(crate) label: String,
+    /// Steps of one group share a colour (a schedule's period).
+    pub(crate) group: u32,
+    /// The group's colour, on the model and on the deck's strip.
+    pub(crate) color: [f32; 4],
+}
+
+/// What a [`FieldAnimation`] changed, to put back.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AnimationRestore {
+    pub(crate) list_open: bool,
+    pub(crate) active_variable: Option<String>,
+    pub(crate) isolated_entity: Option<SceneEntityId>,
+}
+
 /// A directional-shell starting point being picked from the viewport.
 #[derive(Clone, Debug)]
 pub(crate) struct ShellStartPick {
@@ -5035,6 +5114,9 @@ impl OptimizationState {
     }
 
     pub(crate) fn schedule_status(&self, parent: &OptimizationScenario, schedule: &crate::model::scheduling::Schedule) -> ScheduleStatus {
+        if self.schedules_after_run.get(&parent.id).is_some_and(|waiting| waiting.contains(&schedule.id)) {
+            return ScheduleStatus::Queued;
+        }
         if self.status(parent) != ScenarioStatus::UpToDate || !self.results.contains_key(&parent.id) {
             return ScheduleStatus::Blocked;
         }
@@ -5057,7 +5139,10 @@ impl OptimizationState {
 
     /// Whether a run is going or waiting, so the list keeps repainting.
     pub(crate) fn any_running(&self) -> bool {
-        self.runs.values().any(|run| matches!(run, RunState::Queued | RunState::Running { .. }))
+        self.runs
+            .values()
+            .chain(self.schedule_runs.values())
+            .any(|run| matches!(run, RunState::Queued | RunState::Running { .. }))
     }
 
     pub(crate) fn running_count(&self) -> usize {
