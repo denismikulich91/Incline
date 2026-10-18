@@ -1454,6 +1454,9 @@ pub(crate) struct ScenarioFile {
     /// this project: one for every schedule's animation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) animation_speed: Option<f64>,
+    /// The schedule Results tables' columns, by table (`periods`, `pits`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) schedule_columns: BTreeMap<String, Vec<String>>,
 }
 
 impl ScenarioFile {
@@ -1463,6 +1466,7 @@ impl ScenarioFile {
             scenarios,
             report_columns: BTreeMap::new(),
             animation_speed: None,
+            schedule_columns: BTreeMap::new(),
         }
     }
 }

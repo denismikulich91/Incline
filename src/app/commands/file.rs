@@ -179,6 +179,13 @@ pub(crate) enum FileDialogAction {
     OpenOptimizationReport(PathBuf),
     #[cfg(target_arch = "wasm32")]
     WebOpenOptimizationReport(std::result::Result<crate::model::input::InputFile, String>),
+    /// The schedule's periods file goes here, its pits file beside it.
+    #[cfg(not(target_arch = "wasm32"))]
+    ExportScheduleReport { path: PathBuf, periods: Vec<u8>, pits: Vec<u8> },
+    #[cfg(not(target_arch = "wasm32"))]
+    OpenScheduleReport(PathBuf),
+    #[cfg(target_arch = "wasm32")]
+    WebOpenScheduleReport(std::result::Result<crate::model::input::InputFile, String>),
     #[cfg(not(target_arch = "wasm32"))]
     ExportOmf { snapshot: Box<formats::omf::ProjectSnapshot>, path: PathBuf },
     #[cfg(not(target_arch = "wasm32"))]
@@ -824,6 +831,19 @@ impl<'a> App<'a> {
             FileDialogAction::WebOpenOptimizationReport(file) => {
                 let file = file.map_err(anyhow::Error::msg)?;
                 self.show_optimization_report_file(file.source.name.clone(), &file.bytes)
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::ExportScheduleReport { path, periods, pits } => self.write_schedule_report_export(path, periods, pits),
+            #[cfg(not(target_arch = "wasm32"))]
+            FileDialogAction::OpenScheduleReport(path) => {
+                let bytes = std::fs::read(&path).with_context(|| format!("Could not read {}", path.display()))?;
+                let name = path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned());
+                self.show_schedule_report_file(name, &bytes)
+            }
+            #[cfg(target_arch = "wasm32")]
+            FileDialogAction::WebOpenScheduleReport(file) => {
+                let file = file.map_err(anyhow::Error::msg)?;
+                self.show_schedule_report_file(file.source.name.clone(), &file.bytes)
             }
             #[cfg(not(target_arch = "wasm32"))]
             FileDialogAction::OptimizationReportsFolder(path) => {
@@ -2689,8 +2709,9 @@ impl<'a> App<'a> {
             // a folder deleted since the last save must stay gone even
             // though the file on disk still names it.
             design.folders = live_folders;
-            let scenarios_json =
-                |file: &crate::model::optimization::ScenarioFile| serde_json::to_string(&(&file.scenarios, &file.report_columns, &file.animation_speed)).unwrap_or_default();
+            let scenarios_json = |file: &crate::model::optimization::ScenarioFile| {
+                serde_json::to_string(&(&file.scenarios, &file.report_columns, &file.animation_speed, &file.schedule_columns)).unwrap_or_default()
+            };
             let optimization_diverges = scenarios_json(&live_optimization) != scenarios_json(&bundle.optimization.unwrap_or_default());
             design.optimization = live_optimization;
             let folder_map = reloaded_folder_map(&design.folders, &bundle.folders);

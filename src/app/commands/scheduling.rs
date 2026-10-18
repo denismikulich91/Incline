@@ -14,15 +14,19 @@ use std::{
 use anyhow::Result;
 
 use crate::{
-    app::{App, jobs::JobKey},
+    app::{
+        App,
+        commands::{file::FileDialogAction, optimization::folder_name},
+        jobs::JobKey,
+    },
     i18n::tr,
     model::{
         block_model::BlockModelId,
-        optimization::{BlockModelFields, OptimizationScenario, copy_name, format_factor, unique_name},
-        schedule_run::{self, ScheduleInput, ScheduleOutcome, simulate::Held},
-        scheduling::{PeriodCase, Schedule, format_money},
+        optimization::{BlockModelFields, OptimizationScenario, copy_name, unique_name},
+        schedule_run::{self, ScheduleInput, ScheduleOutcome, ScheduleResult, report, simulate::Held},
+        scheduling::{PeriodCase, PushbackChoice, Schedule, format_money},
     },
-    ui::state::{LoadThen, RunState, ScenarioStatus, ScheduleDraft, ScheduleStatus, ScheduleSummary},
+    ui::state::{LoadThen, RunState, ScenarioStatus, ScheduleDraft, ScheduleResultsSource, ScheduleResultsView, ScheduleStatus, ScheduleSummary},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -317,6 +321,8 @@ impl<'a> App<'a> {
             }
         };
         let input = ScheduleInput {
+            scenario_name: scenario.name.clone(),
+            schedule_name: schedule.name.clone(),
             prepared,
             layout,
             run,
@@ -326,7 +332,15 @@ impl<'a> App<'a> {
         };
         userspace_log!(
             "{}",
-            tr!("sched-run-started", name = schedule.name.clone(), pits = input.run.shells.summaries.len().to_string())
+            tr!(
+                "sched-run-started",
+                name = schedule.name.clone(),
+                pits = match schedule.pushbacks {
+                    PushbackChoice::EveryShell => input.run.shells.summaries.len(),
+                    PushbackChoice::Factors => schedule.pushback_factors.len(),
+                }
+                .to_string()
+            )
         );
         let fingerprint = self.editor.optimization.schedule_fingerprint(&scenario, &schedule);
         let started = web_time::Instant::now();
@@ -373,72 +387,54 @@ impl<'a> App<'a> {
             "{}",
             tr!("sched-run-finished", name = name.clone(), seconds = format!("{:.1}", started.elapsed().as_secs_f64()))
         );
-        let unfinished = format!(" {}", tr!("sched-run-unfinished"));
-        let mark = |unfinished_pit: bool| if unfinished_pit { unfinished.clone() } else { String::new() };
-        for (shell, pit) in result.shells.iter().zip(&result.pits) {
-            userspace_log!(
-                "{}",
-                tr!(
-                    "sched-run-pit",
-                    shell = shell.number.to_string(),
-                    factor = match shell.distance {
-                        None => format_factor(shell.factor),
-                        Some(share) => format!("{}, {:.0}%", format_factor(shell.factor), share * 100.0),
-                    },
-                    worst = format!("{}{}", format_money(pit.worst.npv), mark(pit.worst.unfinished)),
-                    lead = format!("{}{}", format_money(pit.lead.npv), mark(pit.lead.unfinished)),
-                    best = format!("{}{}", format_money(pit.best.npv), mark(pit.best.unfinished)),
-                    periods = pit.lead.periods.len().to_string(),
-                    held = pit.lead.periods.iter().filter(|period| period.held.is_some()).count().to_string()
-                )
-            );
-        }
-        match result.peak(PeriodCase::FixedLead) {
-            Some(peak) => {
-                let pit = &result.pits[peak];
+        // The schedule: every pushback, fixed lead.
+        match result.schedule() {
+            Some(pit) => {
+                let schedule_pit = &pit.lead;
+                let peak = result.peak(PeriodCase::FixedLead).filter(|&peak| peak + 1 < result.pits.len());
                 let summary = ScheduleSummary {
-                    peak_shell: peak,
+                    periods: schedule_pit.periods.len(),
+                    peak_before_last: peak.map(|peak| peak + 1),
                     npv_best: pit.best.npv,
                     npv_worst: pit.worst.npv,
-                    npv_lead: pit.lead.npv,
+                    npv_lead: schedule_pit.npv,
                 };
-                let (shell, lead, best, worst) = (
-                    (peak + 1).to_string(),
-                    format_money(summary.npv_lead),
-                    format_money(summary.npv_best),
-                    format_money(summary.npv_worst),
-                );
+                let (lead, best, worst) = (format_money(summary.npv_lead), format_money(summary.npv_best), format_money(summary.npv_worst));
                 userspace_log!(
                     "{}",
                     tr!(
-                        "sched-run-peak",
+                        "sched-run-schedule",
                         name = name.clone(),
-                        shell = shell.clone(),
+                        pushbacks = result.pits.len().to_string(),
+                        periods = summary.periods.to_string(),
                         npv = lead.clone(),
                         best = best.clone(),
                         worst = worst.clone()
                     )
                 );
+                if schedule_pit.unfinished {
+                    userspace_warn!("{}", tr!("sched-run-unfinished-schedule", name = name.clone(), max = schedule.max_periods.to_string()));
+                }
+                if let Some(peak) = peak {
+                    userspace_log!(
+                        "{}",
+                        tr!(
+                            "sched-run-peak-advice",
+                            name = name.clone(),
+                            pushback = (peak + 1).to_string(),
+                            npv = format_money(result.pits[peak].lead.npv)
+                        )
+                    );
+                }
                 // Fixed lead should fall between the bounds.
                 let (low, high) = (summary.npv_worst.min(summary.npv_best), summary.npv_worst.max(summary.npv_best));
                 let slack = 1e-6 * high.abs().max(1.0);
                 if summary.npv_lead < low - slack || summary.npv_lead > high + slack {
-                    userspace_warn!(
-                        "{}",
-                        tr!(
-                            "sched-run-outside-bounds",
-                            name = name.clone(),
-                            shell = shell.clone(),
-                            lead = lead,
-                            best = best,
-                            worst = worst
-                        )
-                    );
+                    userspace_warn!("{}", tr!("sched-run-outside-bounds", name = name.clone(), lead = lead, best = best, worst = worst));
                 }
-                // Where mining waited at the peak because ore had nowhere to go.
+                // Where mining waited because ore had nowhere to go.
                 for reason in [Held::NoStockpile, Held::StockpilesFull] {
-                    let periods: Vec<String> = pit
-                        .lead
+                    let periods: Vec<String> = schedule_pit
                         .periods
                         .iter()
                         .enumerate()
@@ -448,8 +444,8 @@ impl<'a> App<'a> {
                     if !periods.is_empty() {
                         let periods = periods.join(", ");
                         let message = match reason {
-                            Held::NoStockpile => tr!("sched-run-held-no-stockpile", shell = shell.clone(), periods = periods),
-                            Held::StockpilesFull => tr!("sched-run-held-stockpiles-full", shell = shell.clone(), periods = periods),
+                            Held::NoStockpile => tr!("sched-run-held-no-stockpile", periods = periods),
+                            Held::StockpilesFull => tr!("sched-run-held-stockpiles-full", periods = periods),
                         };
                         userspace_warn!("{message}");
                     }
@@ -457,14 +453,15 @@ impl<'a> App<'a> {
                 self.editor.optimization.schedule_summaries.insert(id, summary);
             }
             None => {
-                userspace_warn!("{}", tr!("sched-run-no-peak", name = name.clone(), max = schedule.max_periods.to_string()));
+                userspace_warn!("{}", tr!("sched-run-no-pushbacks", name = name.clone()));
                 self.editor.optimization.schedule_summaries.remove(&id);
             }
         }
         if let Some(order) = result.order.as_ref().filter(|_| period_field.is_some()) {
-            userspace_log!("{}", tr!("sched-run-field-pit", shell = (order.pit + 1).to_string(), case = order.case.label()));
-        } else if period_field.is_some() {
-            userspace_warn!("{}", tr!("sched-run-field-none", case = schedule.period_case.label()));
+            userspace_log!("{}", tr!("sched-run-field-pit", case = order.case.label()));
+        }
+        if schedule.create_reports {
+            self.write_schedule_reports(&result);
         }
         self.editor.optimization.schedule_results.insert(id, Arc::new(result));
         if let (Some(field), Some(values)) = (period_field, field) {
@@ -475,5 +472,144 @@ impl<'a> App<'a> {
             };
             self.write_shell_field(model_id, field, values, HashMap::new(), seed);
         }
+    }
+
+    /// A finished run's CSV files, into its scenario's reports folder (or
+    /// downloaded in the browser).
+    fn write_schedule_reports(&mut self, result: &ScheduleResult) {
+        let Some(scenario) = self.editor.optimization.scenarios.iter().find(|scenario| scenario.name == result.scenario).cloned() else {
+            return;
+        };
+        if cfg!(not(target_arch = "wasm32")) && scenario.output.reports_folder.trim().is_empty() {
+            userspace_warn!("{}", tr!("sched-res-no-reports-folder", name = result.name.clone()));
+            return;
+        }
+        let stem = folder_name(&result.name);
+        for (ending, bytes) in [
+            (report::PERIODS_FILE, report::write_periods_csv(result)),
+            (report::PITS_FILE, report::write_pits_csv(result)),
+        ] {
+            match bytes {
+                Ok(bytes) => self.write_scenario_report_file(&scenario, &format!("{stem}_{ending}"), bytes),
+                Err(error) => userspace_error!("{}", tr!("sched-res-export-failed", error = format!("{error:#}"))),
+            }
+        }
+    }
+
+    /// Open the schedule Results window on a schedule's last run.
+    pub(crate) fn open_schedule_results(&mut self, parent: u64, id: u64) {
+        if !self.editor.optimization.schedule_results.contains_key(&id) {
+            return;
+        }
+        self.editor.optimization.schedule_results_view = Some(ScheduleResultsView::new(ScheduleResultsSource::Run { parent, id }));
+    }
+
+    /// Save what the schedule Results window shows as its two CSV files: the
+    /// periods file where the user picks, the pits file beside it (two
+    /// downloads in the browser).
+    pub(crate) fn export_schedule_report(&mut self) {
+        let Some(result) = self.editor.optimization.schedule_results_result() else {
+            return;
+        };
+        let (periods, pits) = match (report::write_periods_csv(&result), report::write_pits_csv(&result)) {
+            (Ok(periods), Ok(pits)) => (periods, pits),
+            (Err(error), _) | (_, Err(error)) => {
+                userspace_error!("{}", tr!("sched-res-export-failed", error = format!("{error:#}")));
+                return;
+            }
+        };
+        let stem = folder_name(&result.name);
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self::trigger_browser_download(format!("{stem}_{}", report::PERIODS_FILE), periods, "text/csv", "schedule report");
+            Self::trigger_browser_download(format!("{stem}_{}", report::PITS_FILE), pits, "text/csv", "schedule report");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let file_name = format!("{stem}_{}", report::PERIODS_FILE);
+            self.spawn_file_dialog(async move {
+                let handle = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).set_file_name(file_name).save_file().await?;
+                Some(FileDialogAction::ExportScheduleReport {
+                    path: handle.path().to_owned(),
+                    periods,
+                    pits,
+                })
+            });
+        }
+    }
+
+    /// Write the exported files: the periods file at `path`, the pits file
+    /// beside it (`_periods` in the name becomes `_pits`, or `_pits` is added).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn write_schedule_report_export(&mut self, mut path: std::path::PathBuf, periods: Vec<u8>, pits: Vec<u8>) -> Result<()> {
+        if path.extension().is_none() {
+            path.set_extension("csv");
+        }
+        let stem = path.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        let pits_stem = match stem.strip_suffix("_periods") {
+            Some(base) => format!("{base}_pits"),
+            None => format!("{stem}_pits"),
+        };
+        let pits_path = path.with_file_name(format!("{pits_stem}.csv"));
+        for (path, bytes) in [(&path, &periods), (&pits_path, &pits)] {
+            crate::model::atomic_file::write_atomic(path, |file| Ok(std::io::Write::write_all(file, bytes)?))
+                .map_err(|error| anyhow::anyhow!("{}", tr!("sched-res-export-failed", error = format!("{error:#}"))))?;
+            userspace_log!("{}", tr!("opt-results-exported", path = path.display().to_string()));
+        }
+        Ok(())
+    }
+
+    /// Ask for a schedule periods CSV and show it in the Results window.
+    pub(crate) fn open_schedule_report(&mut self) {
+        #[cfg(target_arch = "wasm32")]
+        self.spawn_file_dialog(async {
+            let handle = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).pick_file().await?;
+            Some(FileDialogAction::WebOpenScheduleReport(crate::model::input::read_browser_handle(handle).await))
+        });
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_file_dialog(async {
+            let handle = rfd::AsyncFileDialog::new().add_filter("CSV", &["csv"]).pick_file().await?;
+            Some(FileDialogAction::OpenScheduleReport(handle.path().to_owned()))
+        });
+    }
+
+    /// Show the schedule periods file in `bytes`, read from file `name`.
+    pub(crate) fn show_schedule_report_file(&mut self, name: String, bytes: &[u8]) -> Result<()> {
+        // Its column choices are saved with the scenarios.
+        self.ensure_optimization_scenarios_loaded();
+        let result = report::read_periods_csv(bytes).map_err(|error| anyhow::anyhow!("{}", tr!("sched-res-open-failed", name = name.clone(), error = format!("{error:#}"))))?;
+        userspace_log!("{}", tr!("sched-res-opened", name = name.clone(), count = result.pits.len().to_string()));
+        self.editor.optimization.schedule_results_view = Some(ScheduleResultsView::new(ScheduleResultsSource::File { name, result: Arc::new(result) }));
+        Ok(())
+    }
+
+    /// A copy of schedule `id` with the shells of `factors` as its chosen
+    /// pushbacks, saved and opened in the editor.
+    pub(crate) fn schedule_from_pushbacks(&mut self, parent: u64, id: u64, mut factors: Vec<f64>) -> Result<()> {
+        if factors.is_empty() {
+            return Ok(());
+        }
+        factors.sort_by(f64::total_cmp);
+        factors.dedup();
+        let fresh = self.editor.optimization.fresh_id();
+        let Some(scenario) = self.scenario_mut(parent) else {
+            return Ok(());
+        };
+        let Some(source) = scenario.schedules.iter().find(|schedule| schedule.id == id) else {
+            return Ok(());
+        };
+        let mut copy = source.clone();
+        copy.id = fresh;
+        copy.name = copy_of(scenario, &copy.name);
+        copy.pushbacks = PushbackChoice::Factors;
+        copy.pushback_factors = factors;
+        let name = copy.name.clone();
+        scenario.schedules.push(copy);
+        self.editor.optimization.expanded.insert(parent);
+        userspace_log!("{}", tr!("sched-res-new-schedule", name = name));
+        self.write_optimization_scenarios()?;
+        self.editor.optimization.schedule_results_view = None;
+        self.edit_schedule(parent, fresh);
+        Ok(())
     }
 }

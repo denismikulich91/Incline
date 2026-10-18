@@ -21,6 +21,7 @@ pub(crate) mod point_cloud;
 pub(crate) mod products;
 pub(crate) mod reference_points;
 pub(crate) mod reference_surface;
+pub(crate) mod schedule_results;
 pub(crate) mod scheduling;
 pub(crate) mod survey;
 pub(crate) mod triangulation;

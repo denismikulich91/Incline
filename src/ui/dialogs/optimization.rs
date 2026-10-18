@@ -70,6 +70,7 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
     }
     // The Results window stands apart from the list and the editor.
     super::optimization_results::draw_results_window(ui, &mut editor.optimization, commands);
+    super::schedule_results::draw_schedule_results_window(ui, &mut editor.optimization, commands);
     draw_load_prompt(ui, &mut editor.optimization, commands);
     // The picker belongs to the editor: it goes with it, and does not come
     // back the next time the editor opens.
@@ -410,14 +411,17 @@ fn draw_schedule_rows(ui: &mut egui::Ui, state: &OptimizationState, scenario: &O
                 if animate.clicked() {
                     actions.push(UiCommand::PlayScheduleAnimation { parent, id: schedule.id });
                 }
-                // Results come with the schedule engine.
+                // The schedule's results, from its last run.
+                let has_results = status == ScheduleStatus::UpToDate && state.schedule_results.contains_key(&schedule.id);
                 let results = ToolbarButton::new(
                     egui::Image::new(unthemed_icon!("results_scenario.svg")).tint(menu::accent_fill(ui.visuals())),
-                    tr!("opt-results-not-run"),
+                    if has_results { tr!("sched-res-button") } else { tr!("opt-results-not-run") },
                 )
                 .id_salt(("sched_results", schedule.id))
                 .button_side(ICON_SIDE);
-                ui.add_enabled_ui(false, |ui| ui.add(results));
+                if ui.add_enabled_ui(has_results, |ui| ui.add(results)).inner.clicked() {
+                    actions.push(UiCommand::OpenScheduleResults { parent, id: schedule.id });
+                }
                 schedule_status_icon(ui, status);
                 if !issues.is_empty() {
                     let image = egui::Image::new(unthemed_icon!("status_broken.svg")).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
@@ -466,13 +470,20 @@ fn npv_cell(ui: &mut egui::Ui, summary: Option<ScheduleSummary>, highest: bool) 
     }
     let response = ui.add_sized([NPV_WIDTH, ICON_SIDE], egui::Label::new(rich));
     match summary {
-        Some(summary) => response.on_hover_text(tr!(
-            "sched-npv-hover",
-            shell = (summary.peak_shell + 1).to_string(),
-            lead = format_money(summary.npv_lead),
-            best = format_money(summary.npv_best),
-            worst = format_money(summary.npv_worst)
-        )),
+        Some(summary) => {
+            let mut text = tr!(
+                "sched-npv-hover",
+                periods = summary.periods.to_string(),
+                lead = format_money(summary.npv_lead),
+                best = format_money(summary.npv_best),
+                worst = format_money(summary.npv_worst)
+            );
+            if let Some(pushback) = summary.peak_before_last {
+                text.push('\n');
+                text.push_str(&tr!("sched-npv-hover-peak", pushback = pushback.to_string()));
+            }
+            response.on_hover_text(text)
+        }
         None => response.on_hover_text(tr!("sched-npv-none")),
     };
 }

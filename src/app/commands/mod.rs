@@ -790,6 +790,23 @@ impl<'a> App<'a> {
                 self.play_schedule_animation(parent, id);
                 Ok(())
             }
+            UiCommand::OpenScheduleResults { parent, id } => {
+                self.open_schedule_results(parent, id);
+                Ok(())
+            }
+            UiCommand::ExportScheduleReport => {
+                self.export_schedule_report();
+                Ok(())
+            }
+            UiCommand::OpenScheduleReport => {
+                self.open_schedule_report();
+                Ok(())
+            }
+            UiCommand::SaveScheduleColumns => {
+                self.ensure_optimization_scenarios_loaded();
+                self.write_optimization_scenarios()
+            }
+            UiCommand::ScheduleFromPushbacks { parent, id, factors } => self.schedule_from_pushbacks(parent, id, factors),
             UiCommand::ApplyFieldAnimation => {
                 self.apply_field_animation();
                 Ok(())

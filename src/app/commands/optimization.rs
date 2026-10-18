@@ -50,7 +50,7 @@ impl<'a> App<'a> {
     /// Read the project's scenarios once per opened project, before anything
     /// that shows or writes them - a write before the read would replace the
     /// saved scenarios with an empty list.
-    fn ensure_optimization_scenarios_loaded(&mut self) {
+    pub(super) fn ensure_optimization_scenarios_loaded(&mut self) {
         if !self.editor.optimization.loaded_from_file {
             self.editor.optimization.loaded_from_file = true;
             self.load_saved_optimization_scenarios();
@@ -212,6 +212,7 @@ impl<'a> App<'a> {
         self.editor.optimization.scenarios = file.scenarios;
         self.editor.optimization.report_columns = file.report_columns;
         self.editor.optimization.animation_speed = file.animation_speed;
+        self.editor.optimization.schedule_columns = file.schedule_columns;
     }
 
     /// Hand the scenarios to the active project, which then reads as unsaved
@@ -220,6 +221,7 @@ impl<'a> App<'a> {
         let mut file = ScenarioFile::new(self.editor.optimization.scenarios.clone());
         file.report_columns = self.editor.optimization.report_columns.clone();
         file.animation_speed = self.editor.optimization.animation_speed;
+        file.schedule_columns = self.editor.optimization.schedule_columns.clone();
         let Some(project) = self.workspace.active_project_mut() else {
             anyhow::bail!("{}", tr!("opt-scenarios-save-failed", error = tr!("opt-scenarios-no-project")));
         };
@@ -973,12 +975,19 @@ impl<'a> App<'a> {
     /// replacing only the report file (the folder and anything else in it are
     /// left alone); in the browser, as a download.
     fn write_optimization_report(&mut self, scenario: &OptimizationScenario, bytes: Vec<u8>) {
+        self.write_scenario_report_file(scenario, report::FILE_NAME, bytes);
+    }
+
+    /// Write report `file_name` of `scenario` (its own, or one of its
+    /// schedules'): on the desktop into `<reports folder>/<scenario>/`,
+    /// replacing only that file; in the browser, as a download.
+    pub(super) fn write_scenario_report_file(&mut self, scenario: &OptimizationScenario, file_name: &str, bytes: Vec<u8>) {
         #[cfg(target_arch = "wasm32")]
-        Self::trigger_browser_download(format!("{}_{}", folder_name(&scenario.name), report::FILE_NAME), bytes, "text/csv", "optimization report");
+        Self::trigger_browser_download(format!("{}_{}", folder_name(&scenario.name), file_name), bytes, "text/csv", "optimization report");
         #[cfg(not(target_arch = "wasm32"))]
         {
             let folder = std::path::Path::new(scenario.output.reports_folder.trim()).join(folder_name(&scenario.name));
-            let path = folder.join(report::FILE_NAME);
+            let path = folder.join(file_name);
             let written = std::fs::create_dir_all(&folder)
                 .map_err(anyhow::Error::from)
                 .and_then(|()| crate::model::atomic_file::write_atomic(&path, |file| Ok(std::io::Write::write_all(file, &bytes)?)));
@@ -1064,7 +1073,7 @@ fn scenario_copy_name(scenarios: &[OptimizationScenario], name: &str) -> String 
 /// A scenario name made safe as a folder or file name: characters no file
 /// system takes become `_`, and invisible direction marks (pasted names often
 /// carry them) are dropped.
-fn folder_name(name: &str) -> String {
+pub(super) fn folder_name(name: &str) -> String {
     let safe: String = name
         .trim()
         .chars()

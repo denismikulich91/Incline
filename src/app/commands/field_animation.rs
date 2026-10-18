@@ -22,7 +22,7 @@ use crate::{
         SceneEntityId,
         block_model::{Boundary, ColorTransferFunction, MAX_GRADIENT_ENTRIES},
         optimization_run::grid::BlockLayout,
-        schedule_run::{ORDER_AIR, ORDER_GROUND},
+        schedule_run::{ORDER_AIR, ORDER_GROUND, format_elevation},
     },
     ui::state::{AnimationRestore, AnimationStep, FieldAnimation},
     userspace_log, userspace_warn,
@@ -103,7 +103,7 @@ impl<'a> App<'a> {
                 label: tr!(
                     "sched-anim-step",
                     pushback = step.pushback.to_string(),
-                    elevation = format!("{:.1}", step.elevation),
+                    elevation = format_elevation(step.elevation),
                     period = step.period.to_string()
                 ),
                 group: step.period,

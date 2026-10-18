@@ -19,7 +19,7 @@
 //! average grade; the lots share the stockpile's capacity.
 
 use super::{
-    panels::{ELEMENT_RECOVERED, Layout, Panels, Slot},
+    panels::{ELEMENT_GRADE_TONNES, ELEMENT_RECOVERED, Layout, Panels, Slot},
     sequence::Step,
 };
 use crate::model::scheduling::{PeriodLimit, ResolvedSchedule};
@@ -97,19 +97,72 @@ pub(crate) struct PeriodResult {
     /// Rock mined, ore and waste.
     pub(crate) mined: f64,
     pub(crate) waste: f64,
+    /// Per destination (waste, 0, stays 0): ore mined and sent straight to
+    /// its method.
+    pub(crate) mined_direct: Vec<f64>,
     /// Per destination (waste, 0, stays 0), tonnes processed, direct and reclaimed.
     pub(crate) processed: Vec<f64>,
     pub(crate) stocked: f64,
     pub(crate) reclaimed: f64,
-    /// Per stockpile, the tonnes on it at the end of the period (all its lots).
+    /// Per stockpile: tonnes put on it, tonnes reclaimed from it, and on it
+    /// at the end of the period (all its lots).
+    pub(crate) stocked_by: Vec<f64>,
+    pub(crate) reclaimed_by: Vec<f64>,
     pub(crate) stockpile_balance: Vec<f64>,
-    /// Per element, the sales units recovered.
+    /// Per stockpile, tonnes times main-quality grade of the same three: put
+    /// on, reclaimed, and on it at the end (each over its tonnes is its grade).
+    pub(crate) stocked_grade_tonnes: Vec<f64>,
+    pub(crate) reclaimed_grade_tonnes: Vec<f64>,
+    pub(crate) balance_grade_tonnes: Vec<f64>,
+    /// Per element: tonnes times grade of what was processed (the feed
+    /// grade, over the tonnes processed), and the sales units recovered.
+    pub(crate) feed_grade_tonnes: Vec<f64>,
     pub(crate) recovered: Vec<f64>,
     pub(crate) revenue: f64,
-    /// Every cost of the period: mining, processing, rehandling, the fixed
-    /// cost and the events' capital.
+    /// Mining, waste haulage, rehabilitation and ore haulage of what was mined.
+    pub(crate) mining_cost: f64,
+    /// Processing, G&A and element costs of what was processed.
+    pub(crate) processing_cost: f64,
+    pub(crate) rehandle_cost: f64,
+    pub(crate) fixed_cost: f64,
+    /// The events' capital.
+    pub(crate) capex: f64,
+    /// Every cost of the period: the five above.
     pub(crate) cost: f64,
     pub(crate) cash_flow: f64,
+    /// The cash flow discounted to period 0 (end of period).
+    pub(crate) discounted_cash_flow: f64,
+}
+
+impl PeriodResult {
+    /// Tonnes processed by every method.
+    pub(crate) fn processed_total(&self) -> f64 {
+        self.processed.iter().sum()
+    }
+
+    /// Tonnes on every stockpile at the end of the period.
+    pub(crate) fn balance_total(&self) -> f64 {
+        self.stockpile_balance.iter().sum()
+    }
+
+    /// Stockpile `stockpile`'s grade (main quality) of what was put on it,
+    /// reclaimed from it, or is on it: `figure` 0, 1 or 2.
+    pub(crate) fn stockpile_grade(&self, stockpile: usize, figure: usize) -> Option<f64> {
+        let (tonnes, grade_tonnes) = match figure {
+            0 => (&self.stocked_by, &self.stocked_grade_tonnes),
+            1 => (&self.reclaimed_by, &self.reclaimed_grade_tonnes),
+            _ => (&self.stockpile_balance, &self.balance_grade_tonnes),
+        };
+        let tonnes = tonnes.get(stockpile).copied().unwrap_or(0.0);
+        (tonnes > TOLERANCE).then(|| grade_tonnes.get(stockpile).copied().unwrap_or(0.0) / tonnes)
+    }
+
+    /// The head grade (of what was processed, direct and reclaimed) of
+    /// element `element`, or `None` with nothing processed.
+    pub(crate) fn feed_grade(&self, element: usize) -> Option<f64> {
+        let tonnes = self.processed_total();
+        (tonnes > 0.0).then(|| self.feed_grade_tonnes.get(element).copied().unwrap_or(0.0) / tonnes)
+    }
 }
 
 /// One candidate pit scheduled one way.
@@ -247,6 +300,14 @@ pub(crate) fn simulate(context: &Context, pushbacks: &[&Panels], steps: &[Step],
     let destinations = context.destinations();
     let stockpiles = &settings.stockpiles;
     let mut lots: Vec<Vec<f64>> = context.initial_lots.to_vec();
+    // The main quality's tonnes x grade of a parcel or lot (none without elements).
+    let main_grade_tonnes = |values: &[f64]| {
+        if layout.elements > 0 {
+            values[layout.element_at(0, 0, ELEMENT_GRADE_TONNES)]
+        } else {
+            0.0
+        }
+    };
     let lot_tonnes = |lots: &[Vec<f64>], stockpile: usize| -> f64 { (0..destinations).map(|destination| lots[stockpile][destination * stride + Slot::Tonnes as usize]).sum() };
 
     let mut position = 0;
@@ -331,7 +392,13 @@ pub(crate) fn simulate(context: &Context, pushbacks: &[&Panels], steps: &[Step],
         // What this period processes and earns.
         let mut result = PeriodResult {
             held: held_by,
+            mined_direct: vec![0.0; destinations],
             processed: vec![0.0; destinations],
+            stocked_by: vec![0.0; stockpiles.len()],
+            reclaimed_by: vec![0.0; stockpiles.len()],
+            stocked_grade_tonnes: vec![0.0; stockpiles.len()],
+            reclaimed_grade_tonnes: vec![0.0; stockpiles.len()],
+            feed_grade_tonnes: vec![0.0; layout.elements],
             recovered: vec![0.0; layout.elements],
             ..PeriodResult::default()
         };
@@ -344,6 +411,9 @@ pub(crate) fn simulate(context: &Context, pushbacks: &[&Panels], steps: &[Step],
             for (element, recovered) in result.recovered.iter_mut().enumerate() {
                 *recovered += values[layout.element_at(0, element, ELEMENT_RECOVERED)] * share;
             }
+            for (element, grade_tonnes) in result.feed_grade_tonnes.iter_mut().enumerate() {
+                *grade_tonnes += values[layout.element_at(0, element, ELEMENT_GRADE_TONNES)] * share;
+            }
         };
         for (index, info) in layout.parcels.iter().enumerate() {
             let values = parcel(layout, &mined, index);
@@ -352,6 +422,7 @@ pub(crate) fn simulate(context: &Context, pushbacks: &[&Panels], steps: &[Step],
             if index == 0 {
                 result.waste += values[Slot::Tonnes as usize];
             } else if placement.direct[index] > 0.0 {
+                result.mined_direct[info.destination] += values[Slot::Tonnes as usize] * placement.direct[index];
                 process(&mut result, &mut process_cost, values, info.destination, placement.direct[index]);
             }
         }
@@ -361,6 +432,8 @@ pub(crate) fn simulate(context: &Context, pushbacks: &[&Panels], steps: &[Step],
             let destination = layout.parcels[index].destination;
             let values = parcel(layout, &mined, index);
             result.stocked += values[Slot::Tonnes as usize] * share;
+            result.stocked_by[stockpile] += values[Slot::Tonnes as usize] * share;
+            result.stocked_grade_tonnes[stockpile] += main_grade_tonnes(values) * share;
             add_scaled(&mut lots[stockpile][destination * stride..(destination + 1) * stride], values, share);
         }
         let mut room = placement.room;
@@ -383,12 +456,20 @@ pub(crate) fn simulate(context: &Context, pushbacks: &[&Panels], steps: &[Step],
                 room.take(layout, lot, destination, share);
                 process(&mut result, &mut process_cost, lot, destination, share);
                 result.reclaimed += tonnes * share;
+                result.reclaimed_by[stockpile] += tonnes * share;
+                result.reclaimed_grade_tonnes[stockpile] += main_grade_tonnes(lot) * share;
                 rehandle += tonnes * share * stockpiles[stockpile].rehandle_cost;
                 add_scaled(&mut lots[stockpile][destination * stride..(destination + 1) * stride], lot, -share);
             }
         }
-        result.cost = mine_cost + process_cost + rehandle + settings.fixed_cost + settings.capex_in(period);
+        result.mining_cost = mine_cost;
+        result.processing_cost = process_cost;
+        result.rehandle_cost = rehandle;
+        result.fixed_cost = settings.fixed_cost;
+        result.capex = settings.capex_in(period);
+        result.cost = mine_cost + process_cost + rehandle + result.fixed_cost + result.capex;
         result.cash_flow = result.revenue - result.cost;
+        result.discounted_cash_flow = result.cash_flow / (1.0 + settings.rate).powi(period as i32);
 
         // Once the pit is mined out, a period only reclaiming runs while it pays.
         if finished_mining && result.cash_flow <= 0.0 {
@@ -396,7 +477,15 @@ pub(crate) fn simulate(context: &Context, pushbacks: &[&Panels], steps: &[Step],
             break;
         }
         result.stockpile_balance = (0..stockpiles.len()).map(|stockpile| lot_tonnes(&lots, stockpile).max(0.0)).collect();
-        schedule.npv += result.cash_flow / (1.0 + settings.rate).powi(period as i32);
+        result.balance_grade_tonnes = (0..stockpiles.len())
+            .map(|stockpile| {
+                (0..destinations)
+                    .map(|destination| main_grade_tonnes(&lots[stockpile][destination * stride..(destination + 1) * stride]))
+                    .sum::<f64>()
+                    .max(0.0)
+            })
+            .collect();
+        schedule.npv += result.discounted_cash_flow;
         schedule.periods.push(result);
         if let Some(record) = record.as_deref_mut() {
             for step in crossed {

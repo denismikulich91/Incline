@@ -16,7 +16,7 @@ use crate::{
         state::{OptimizationState, ResultsSource, ShellFilter, UiCommand},
         themed_icon,
         widgets::{
-            bar_line_chart::{BarLineChart, BarSeries, LineSeries},
+            bar_line_chart::{BarLineChart, BarSeries, LineScale, LineSeries},
             context_menu::context_menu_separator,
             data_table::DataTable,
             menu::{self, DragableMenu, MenuButton, menu_note},
@@ -25,20 +25,20 @@ use crate::{
     },
 };
 
-const WIDTH: f32 = 860.0;
-const CHART_HEIGHT: f32 = 280.0;
-const TABLE_HEIGHT: f32 = 240.0;
+pub(super) const WIDTH: f32 = 860.0;
+pub(super) const CHART_HEIGHT: f32 = 280.0;
+pub(super) const TABLE_HEIGHT: f32 = 240.0;
 /// Cash flow line: the green of the run button.
-const CASH_FLOW: egui::Color32 = egui::Color32::from_rgb(0x2f, 0xb3, 0x44);
+pub(super) const CASH_FLOW: egui::Color32 = egui::Color32::from_rgb(0x2f, 0xb3, 0x44);
 /// Main grade line: a muted violet, apart from the bars and the cash flow.
-const GRADE: egui::Color32 = egui::Color32::from_rgb(150, 110, 210);
+pub(super) const GRADE: egui::Color32 = egui::Color32::from_rgb(150, 110, 210);
 /// Ore bars: a calm amber; waste bars: stone grey.
-const ORE: egui::Color32 = egui::Color32::from_rgb(214, 160, 72);
-const WASTE_BARS: egui::Color32 = egui::Color32::from_rgb(150, 152, 160);
+pub(super) const ORE: egui::Color32 = egui::Color32::from_rgb(214, 160, 72);
+pub(super) const WASTE_BARS: egui::Color32 = egui::Color32::from_rgb(150, 152, 160);
 /// Where the grade line sits, as fractions of the chart's height: the middle,
 /// clear of the bars' tops and of the cash flow's ends.
-const GRADE_BAND: (f32, f32) = (0.35, 0.65);
-const ICON_SIDE: f32 = 26.0;
+pub(super) const GRADE_BAND: (f32, f32) = (0.35, 0.65);
+pub(super) const ICON_SIDE: f32 = 26.0;
 
 pub(crate) fn draw_results_window(ui: &mut egui::Ui, state: &mut OptimizationState, commands: &mut Vec<UiCommand>) {
     let Some(view) = state.results_view.as_ref() else {
@@ -248,7 +248,7 @@ fn draw_controls(
 
 /// While shells are being chosen: what to do, how many are chosen, and Apply
 /// and Cancel. `Some(true)` when applied, `Some(false)` when cancelled.
-fn draw_choosing_bar(ui: &mut egui::Ui, chosen: usize) -> Option<bool> {
+pub(super) fn draw_choosing_bar(ui: &mut egui::Ui, chosen: usize) -> Option<bool> {
     let mut outcome = None;
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -369,6 +369,7 @@ fn draw_chart(ui: &mut egui::Ui, report: &OptimizationReport, rows: &[Row], high
     };
     let mut chart = BarLineChart::new(&labels)
         .height(CHART_HEIGHT)
+        .id_salt("opt_results_chart")
         .bars(BarSeries {
             name: tr!("opt-results-ore-tonnes"),
             color: ORE,
@@ -383,14 +384,14 @@ fn draw_chart(ui: &mut egui::Ui, report: &OptimizationReport, rows: &[Row], high
             name: tr!("opt-results-cash-flow"),
             color: CASH_FLOW,
             values: &cash_flow,
-            band: None,
+            scale: LineScale::Own(None),
         });
     if let Some(name) = &grade_name {
         chart = chart.line(LineSeries {
             name: name.clone(),
             color: GRADE,
             values: &grade,
-            band: Some(GRADE_BAND),
+            scale: LineScale::Own(Some(GRADE_BAND)),
         });
     }
     let columns = rows.iter().enumerate().filter(|(_, row)| highlighted.contains(&row.shell)).map(|(column, _)| column);

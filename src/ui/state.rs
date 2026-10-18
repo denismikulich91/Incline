@@ -3753,6 +3753,23 @@ pub(crate) enum UiCommand {
     },
     /// Show the playback deck's step on the block model.
     ApplyFieldAnimation,
+    /// Open the schedule Results window on a schedule's last run.
+    OpenScheduleResults {
+        parent: u64,
+        id: u64,
+    },
+    /// Save the schedule Results window's CSV files where the user picks.
+    ExportScheduleReport,
+    /// Read a schedule's periods CSV into the Results window.
+    OpenScheduleReport,
+    /// Keep the schedule Results tables' column choices, with the scenarios.
+    SaveScheduleColumns,
+    /// A copy of schedule `id` mining the shells of `factors` as its pushbacks.
+    ScheduleFromPushbacks {
+        parent: u64,
+        id: u64,
+        factors: Vec<f64>,
+    },
     /// Close the playback deck, putting the view back.
     CloseFieldAnimation,
     OpenCreateBlockModel,
@@ -4031,6 +4048,11 @@ impl UiCommand {
             | Self::RunSchedule { .. }
             | Self::PlayScheduleAnimation { .. }
             | Self::ApplyFieldAnimation
+            | Self::OpenScheduleResults { .. }
+            | Self::ExportScheduleReport
+            | Self::OpenScheduleReport
+            | Self::SaveScheduleColumns
+            | Self::ScheduleFromPushbacks { .. }
             | Self::CloseFieldAnimation
             | Self::OpenCreateBlockModel
             | Self::OpenCreateOreTriangulation
@@ -4805,8 +4827,11 @@ pub(crate) enum ScheduleStatus {
 /// list's NPV column. Filled by the scheduling engine (stage 2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ScheduleSummary {
-    /// 0-based shell of the parent's run where the fixed-lead NPV peaks.
-    pub(crate) peak_shell: usize,
+    /// Periods the schedule (every pushback, fixed lead) takes.
+    pub(crate) periods: usize,
+    /// The pushback (1-based) where the fixed-lead NPV peaks, when it peaks
+    /// before the last one.
+    pub(crate) peak_before_last: Option<usize>,
     pub(crate) npv_best: f64,
     pub(crate) npv_worst: f64,
     pub(crate) npv_lead: f64,
@@ -4892,6 +4917,11 @@ pub(crate) struct OptimizationState {
     /// The playback deck's speed last set in this project (steps a second),
     /// saved with the scenarios.
     pub(crate) animation_speed: Option<f64>,
+    /// The schedule Results window, when open.
+    pub(crate) schedule_results_view: Option<ScheduleResultsView>,
+    /// The schedule Results tables' columns, by table (`periods`, `pits`),
+    /// saved with the scenarios; a table not in here shows the default ones.
+    pub(crate) schedule_columns: std::collections::BTreeMap<String, Vec<String>>,
     /// Asking whether to load the unloaded inputs a run or pick needs.
     pub(crate) load_prompt: Option<LoadPrompt>,
     /// The schedule editor. Never open with `draft`; the list hides behind either.
@@ -4942,6 +4972,61 @@ pub(crate) struct ResultsView {
     pub(crate) selected: Option<usize>,
     /// Showing only some shells, or choosing them.
     pub(crate) filter: ShellFilter,
+}
+
+/// The schedule Results window.
+#[derive(Clone, Debug)]
+pub(crate) struct ScheduleResultsView {
+    pub(crate) source: ScheduleResultsSource,
+    pub(crate) tab: ScheduleResultsTab,
+    pub(crate) case: crate::model::scheduling::PeriodCase,
+    pub(crate) content: PeriodContent,
+    /// Pushbacks (0-based) being picked for a new schedule, or none.
+    pub(crate) picking: Option<Vec<usize>>,
+    /// The pit view shows the worst and best NPV too, not only fixed lead.
+    pub(crate) all_cases: bool,
+}
+
+impl ScheduleResultsView {
+    pub(crate) fn new(source: ScheduleResultsSource) -> Self {
+        Self {
+            source,
+            tab: ScheduleResultsTab::Periods,
+            case: crate::model::scheduling::PeriodCase::FixedLead,
+            content: PeriodContent::Mining,
+            picking: None,
+            all_cases: false,
+        }
+    }
+}
+
+/// What the schedule Results window shows.
+#[derive(Clone, Debug)]
+pub(crate) enum ScheduleResultsSource {
+    /// A schedule's last run this session.
+    Run { parent: u64, id: u64 },
+    /// A periods CSV read from a file.
+    File {
+        name: String,
+        result: std::sync::Arc<crate::model::schedule_run::ScheduleResult>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScheduleResultsTab {
+    /// The schedule, period by period.
+    Periods,
+    /// NPV per pushback taken as the final pit.
+    Pits,
+}
+
+/// What the period chart's bars are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PeriodContent {
+    /// Rock mined: waste, ore to its method, ore to stockpiles.
+    Mining,
+    /// Ore processed per method.
+    Processing,
 }
 
 /// The Results window's shell filter: off, being chosen in the chart, or applied.
@@ -5135,6 +5220,14 @@ impl OptimizationState {
         (self.schedule_status(parent, schedule) == ScheduleStatus::UpToDate)
             .then(|| self.schedule_summaries.get(&schedule.id).copied())
             .flatten()
+    }
+
+    /// The result the schedule Results window shows.
+    pub(crate) fn schedule_results_result(&self) -> Option<std::sync::Arc<crate::model::schedule_run::ScheduleResult>> {
+        match &self.schedule_results_view.as_ref()?.source {
+            ScheduleResultsSource::Run { id, .. } => self.schedule_results.get(id).cloned(),
+            ScheduleResultsSource::File { result, .. } => Some(std::sync::Arc::clone(result)),
+        }
     }
 
     /// Whether a run is going or waiting, so the list keeps repainting.
