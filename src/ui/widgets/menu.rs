@@ -149,8 +149,14 @@ pub(crate) fn menu_surface(visuals: &egui::Visuals) -> egui::Color32 {
 ///
 /// The card's only elevation cue, so it is a firmer line than the one
 /// [`crate::ui::chrome`] draws around a region.
+/// The room a window covering the canvas keeps inside its edges, every side alike.
+const COVER_MARGIN: i8 = 8;
+
+/// Width of the menu border (`menu_border`).
+const MENU_BORDER_WIDTH: f32 = 1.0;
+
 pub(crate) fn menu_border(visuals: &egui::Visuals) -> egui::Stroke {
-    egui::Stroke::new(1.0, shifted(visuals.panel_fill, if visuals.dark_mode { 34 } else { -40 }))
+    egui::Stroke::new(MENU_BORDER_WIDTH, shifted(visuals.panel_fill, if visuals.dark_mode { 34 } else { -40 }))
 }
 
 /// Tint of the drag bar: a hint of separation from the body, no divider line.
@@ -306,6 +312,7 @@ pub(crate) struct DragableMenu<'open> {
     inner_margin: egui::Margin,
     default_pos: Option<egui::Pos2>,
     current_pos: Option<egui::Pos2>,
+    movable: bool,
 }
 
 impl<'open> DragableMenu<'open> {
@@ -325,7 +332,25 @@ impl<'open> DragableMenu<'open> {
             inner_margin: egui::Margin::symmetric(8, 6),
             default_pos: None,
             current_pos: None,
+            movable: true,
         }
+    }
+
+    /// Fill `rect` exactly (the 3D canvas, say), fixed in place: a window
+    /// that takes the whole working area while it is up.
+    pub(crate) fn cover(mut self, rect: egui::Rect) -> Self {
+        // A frame is its content plus its stroke on each side (the menu border,
+        // 1 point), so the content is that much smaller for the frame to fit.
+        let border = 2.0 * MENU_BORDER_WIDTH;
+        let size = (rect.size() - egui::vec2(border, border)).max(egui::Vec2::ZERO);
+        self.current_pos = Some(rect.min);
+        self.fixed_size = Some(size);
+        // The same room on every side, the bottom included.
+        self.inner_margin = egui::Margin::same(COVER_MARGIN);
+        self.min_width = size.x;
+        self.max_width = size.x;
+        self.movable = false;
+        self
     }
 
     /// Show or hide the title bar. A hidden title bar also hides its close button.
@@ -381,13 +406,14 @@ impl<'open> DragableMenu<'open> {
             inner_margin,
             default_pos,
             current_pos,
+            movable,
         } = self;
 
         if open.as_deref().is_some_and(|open| !open) {
             return None;
         }
 
-        let mut area = egui::Area::new(id).order(egui::Order::Foreground).movable(true).constrain(true).fade_in(false);
+        let mut area = egui::Area::new(id).order(egui::Order::Foreground).movable(movable).constrain(true).fade_in(false);
         area = if let Some(current_pos) = current_pos {
             area.pivot(egui::Align2::LEFT_TOP).current_pos(current_pos)
         } else if let Some(default_pos) = default_pos {
@@ -438,12 +464,15 @@ impl<'open> DragableMenu<'open> {
                         ui.spacing_mut().item_spacing.y = spacing;
                         rect
                     });
+                    // The gap the layout leaves between the title bar and the
+                    // body, which a fixed size must make room for too.
+                    let title_gap = if title_bar && inner_margin.top != 0 { ui.spacing().item_spacing.y } else { 0.0 };
 
                     let inner = egui::Frame::NONE
                         .inner_margin(inner_margin)
                         .show(ui, |ui| {
                             if let Some(fixed_size) = fixed_size {
-                                let body_height = fixed_size.y - if title_bar { TITLE_BAR_HEIGHT } else { 0.0 } - inner_margin.sum().y;
+                                let body_height = fixed_size.y - if title_bar { TITLE_BAR_HEIGHT } else { 0.0 } - title_gap - inner_margin.sum().y;
                                 ui.set_min_size(egui::vec2(fixed_size.x - inner_margin.sum().x, body_height.max(0.0)));
                                 ui.set_max_size(egui::vec2(fixed_size.x - inner_margin.sum().x, body_height.max(0.0)));
                             }
@@ -1098,11 +1127,19 @@ impl<'value> MenuFieldBool<'value> {
 /// field row (a deck, a toolbar).
 pub(crate) struct SlidingToggle<'value> {
     value: &'value mut bool,
+    /// The track's size; the house size unless set.
+    size: Option<egui::Vec2>,
 }
 
 impl<'value> SlidingToggle<'value> {
     pub(crate) fn new(value: &'value mut bool) -> Self {
-        Self { value }
+        Self { value, size: None }
+    }
+
+    /// A smaller track, for a switch inside another widget's box.
+    pub(crate) fn size(mut self, size: egui::Vec2) -> Self {
+        self.size = Some(size);
+        self
     }
 }
 
@@ -1110,8 +1147,13 @@ impl egui::Widget for SlidingToggle<'_> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         // The track is a fixed size, but the row's full height stays clickable
         // so the switch is no harder to hit than the fields above it.
-        let height = ui.spacing().interact_size.y.max(TOGGLE_HEIGHT);
-        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(TOGGLE_WIDTH, height), egui::Sense::click());
+        let track = self.size.unwrap_or(egui::vec2(TOGGLE_WIDTH, TOGGLE_HEIGHT));
+        let height = if self.size.is_some() {
+            track.y
+        } else {
+            ui.spacing().interact_size.y.max(TOGGLE_HEIGHT)
+        };
+        let (rect, mut response) = ui.allocate_exact_size(egui::vec2(track.x, height), egui::Sense::click());
 
         if response.clicked() {
             *self.value = !*self.value;
@@ -1128,7 +1170,7 @@ impl egui::Widget for SlidingToggle<'_> {
             // in the previous tab and replays a slide from its stale cached value.
             let value_id = egui::Id::new(self.value as *const bool as usize);
             let animation = ui.ctx().animate_bool_responsive(value_id, *self.value);
-            let track_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(TOGGLE_WIDTH, TOGGLE_HEIGHT));
+            let track_rect = egui::Rect::from_center_size(rect.center(), track);
             let radius = track_rect.height() / 2.0;
             let off_fill = ui.visuals().widgets.inactive.bg_fill;
             let on_fill = ui.visuals().selection.bg_fill;

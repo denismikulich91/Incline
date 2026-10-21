@@ -497,5 +497,40 @@ pub(crate) fn simulate(context: &Context, pushbacks: &[&Panels], steps: &[Step],
     }
     schedule.unfinished = position < steps.len();
     schedule.abandoned = (0..stockpiles.len()).map(|stockpile| lot_tonnes(&lots, stockpile).max(0.0)).sum();
+    // Capital an event puts after the last period run (closure, say) is still
+    // spent: each such period is charged and discounted, with nothing mined
+    // or processed and no fixed cost.
+    if !schedule.unfinished {
+        let last = schedule.periods.len() as u32;
+        if let Some(end) = (last + 1..=settings.max_periods).filter(|&period| settings.capex_in(period) > 0.0).max() {
+            let balance = schedule
+                .periods
+                .last()
+                .map(|period| (period.stockpile_balance.clone(), period.balance_grade_tonnes.clone()));
+            for period in last + 1..=end {
+                let capex = settings.capex_in(period);
+                let discounted = -capex / (1.0 + settings.rate).powi(period as i32);
+                let (stockpile_balance, balance_grade_tonnes) = balance.clone().unwrap_or_else(|| (vec![0.0; stockpiles.len()], vec![0.0; stockpiles.len()]));
+                schedule.npv += discounted;
+                schedule.periods.push(PeriodResult {
+                    mined_direct: vec![0.0; destinations],
+                    processed: vec![0.0; destinations],
+                    stocked_by: vec![0.0; stockpiles.len()],
+                    reclaimed_by: vec![0.0; stockpiles.len()],
+                    stocked_grade_tonnes: vec![0.0; stockpiles.len()],
+                    reclaimed_grade_tonnes: vec![0.0; stockpiles.len()],
+                    stockpile_balance,
+                    balance_grade_tonnes,
+                    feed_grade_tonnes: vec![0.0; layout.elements],
+                    recovered: vec![0.0; layout.elements],
+                    capex,
+                    cost: capex,
+                    cash_flow: -capex,
+                    discounted_cash_flow: discounted,
+                    ..PeriodResult::default()
+                });
+            }
+        }
+    }
     schedule
 }

@@ -23,8 +23,8 @@ use crate::{
     },
     ui::{
         state::{
-            EditorState, OptimizationState, ScenarioDraft, ScenarioGridSelections, ScenarioStatus, ScenarioTab, ScheduleDrop, ScheduleStatus, ScheduleSummary, UiCommand,
-            UiProjectView,
+            EditorState, ListSelection, OptimizationState, ScenarioDraft, ScenarioGridSelections, ScenarioStatus, ScenarioTab, ScheduleDrop, ScheduleStatus, ScheduleSummary,
+            UiCommand, UiProjectView,
         },
         themed_icon, unthemed_icon,
         widgets::{
@@ -47,10 +47,32 @@ const MENU_ICON: f32 = 22.0;
 const LIST_WIDTH: f32 = 806.0;
 const ICON_SIDE: f32 = 26.0;
 
-pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorState, block_models: &[OpenBlockModel], project: &UiProjectView, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_optimization_dialogs(
+    ui: &mut egui::Ui,
+    editor: &mut EditorState,
+    block_models: &[OpenBlockModel],
+    project: &UiProjectView,
+    canvas_rect: egui::Rect,
+    commands: &mut Vec<UiCommand>,
+) {
     // The progress rings move while a run goes, whichever window is up.
     if editor.optimization.any_running() {
         ui.ctx().request_repaint_after(Duration::from_millis(100));
+    }
+    // A graph takes the whole 3D canvas, and the other dialogs step aside
+    // until it closes - so Escape reaches it, not a dialog under it. The
+    // canvas has the chrome gap at its top and sides from the regions beside
+    // it; the bottom toolbar meets it flush, so the same gap is kept there.
+    let canvas_rect = egui::Rect::from_min_max(canvas_rect.min, canvas_rect.max - egui::vec2(0.0, crate::ui::chrome::margin(ui.ctx())));
+    if editor.optimization.schedule_results_view.is_some() {
+        super::schedule_results::draw_schedule_results_window(ui, &mut editor.optimization, canvas_rect, commands);
+        value_field::close_constant_picker(ui.ctx());
+        return;
+    }
+    if editor.optimization.results_view.is_some() {
+        super::optimization_results::draw_results_window(ui, &mut editor.optimization, canvas_rect, commands);
+        value_field::close_constant_picker(ui.ctx());
+        return;
     }
     // While a starting point is picked in the viewport the editor steps aside;
     // the prompt is the viewport banner (`ui::viewport_message`).
@@ -68,9 +90,6 @@ pub(crate) fn draw_optimization_dialogs(ui: &mut egui::Ui, editor: &mut EditorSt
     } else if editor.optimization.list_open {
         draw_scenarios_list(ui, &mut editor.optimization, block_models, project, commands);
     }
-    // The Results window stands apart from the list and the editor.
-    super::optimization_results::draw_results_window(ui, &mut editor.optimization, commands);
-    super::schedule_results::draw_schedule_results_window(ui, &mut editor.optimization, commands);
     draw_load_prompt(ui, &mut editor.optimization, commands);
     // The picker belongs to the editor: it goes with it, and does not come
     // back the next time the editor opens.
@@ -124,10 +143,19 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
         .collect();
     let mut open = true;
     let mut close = false;
-    let mut run = None;
     let mut show_results = None;
     // What the buttons ask for, sent after any name still being typed is committed.
     let mut actions: Vec<UiCommand> = Vec::new();
+    // The picked row, while it is still in the list.
+    let selection = state.list_selection.filter(|selection| match *selection {
+        ListSelection::Scenario(id) => state.scenarios.iter().any(|scenario| scenario.id == id),
+        ListSelection::Schedule { parent, id } => state
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.id == parent)
+            .is_some_and(|scenario| scenario.schedules.iter().any(|schedule| schedule.id == id)),
+    });
+    let mut picked = selection;
     DragableMenu::new("optimization_scenarios_dialog", tr!("opt-scenarios-title"))
         .open(&mut open)
         .min_width(LIST_WIDTH)
@@ -135,6 +163,7 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
         .show(ui.ctx(), |ui| {
             // The name fields outlined in the light theme, as in the editor.
             outline_fields(ui);
+            draw_list_toolbar(ui, state, selection, &mut actions, &mut show_results);
             ui.add_space(4.0);
             if state.scenarios.is_empty() {
                 menu_note(ui, tr!("opt-scenarios-empty"));
@@ -147,6 +176,7 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                 for scenario in &state.scenarios {
                     let status = state.status(scenario);
                     let expanded = state.expanded.contains(&scenario.id);
+                    let background = ui.painter().add(egui::Shape::Noop);
                     let row = ui.horizontal(|ui| {
                         // The disclosure arrow, or the room it takes, so names line up.
                         if scenario.schedules.is_empty() {
@@ -156,22 +186,8 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
-                            // Drawn right to left, so they read: add schedule,
-                            // edit, duplicate, delete, state, results, run.
-                            if play_button(ui, status).clicked() {
-                                run = Some(scenario.id);
-                            }
-                            let has_results = state.results.contains_key(&scenario.id);
-                            let results = ToolbarButton::new(
-                                egui::Image::new(unthemed_icon!("results_scenario.svg")).tint(menu::accent_fill(ui.visuals())),
-                                if has_results { tr!("opt-results-show") } else { tr!("opt-results-not-run") },
-                            )
-                            .id_salt(("opt_results", scenario.id))
-                            .button_side(ICON_SIDE);
-                            if ui.add_enabled_ui(has_results, |ui| ui.add(results)).inner.clicked() {
-                                show_results = Some(scenario.id);
-                            }
-                            status_icon(ui, status);
+                            // Right to left: the state, then anything missing.
+                            status_cell(ui, status);
                             let missing = scenario.missing_references(&models, &surfaces);
                             if !missing.is_empty() {
                                 let image = egui::Image::new(unthemed_icon!("status_broken.svg")).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
@@ -179,33 +195,18 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                                 ui.add_sized([ICON_SIDE, ICON_SIDE], image)
                                     .on_hover_text(format!("{}\n{}", tr!("opt-missing-title"), lines.join("\n")));
                             }
-                            let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("opt-delete"))
-                                .id_salt(("opt_delete", scenario.id))
-                                .button_side(ICON_SIDE);
-                            if ui.add(delete).clicked() {
-                                actions.push(UiCommand::DeleteOptimizationScenario(scenario.id));
-                            }
-                            let duplicate = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "duplicate.svg")), tr!("opt-duplicate"))
-                                .id_salt(("opt_duplicate", scenario.id))
-                                .button_side(ICON_SIDE);
-                            if ui.add(duplicate).clicked() {
-                                actions.push(UiCommand::DuplicateOptimizationScenario(scenario.id));
-                            }
-                            let edit = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "edit.svg")), tr!("opt-edit"))
-                                .id_salt(("opt_edit", scenario.id))
-                                .button_side(ICON_SIDE);
-                            if ui.add(edit).clicked() {
-                                actions.push(UiCommand::EditOptimizationScenario(scenario.id));
-                            }
-                            // In the schedules' colour (see `schedule_rows_fill`).
-                            let add_icon = egui::Image::new(egui::include_image!("../../../res/ui/icons_dark/schedule_add.svg")).tint(menu::accent_fill(ui.visuals()));
-                            let add = ToolbarButton::new(add_icon, tr!("sched-add")).id_salt(("sched_add", scenario.id)).button_side(ICON_SIDE);
-                            if ui.add(add).clicked() {
-                                actions.push(UiCommand::AddSchedule(scenario.id));
-                            }
-                            draw_name_field(ui, scenario.id, &scenario.name, commands, |id, name| UiCommand::RenameOptimizationScenario { id, name });
+                            draw_name_field(
+                                ui,
+                                scenario.id,
+                                &scenario.name,
+                                selection == Some(ListSelection::Scenario(scenario.id)),
+                                commands,
+                                |id, name| UiCommand::RenameOptimizationScenario { id, name },
+                            );
                         });
                     });
+                    let this = ListSelection::Scenario(scenario.id);
+                    select_row(ui, background, row.response.rect, selection == Some(this), this, &mut picked);
                     // A schedule dragged over another scenario's row may be dropped there.
                     if let Some(drag) = egui::DragAndDrop::payload::<ScheduleDrag>(ui.ctx())
                         && drag.from != scenario.id
@@ -229,16 +230,17 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                             pos: ui.ctx().pointer_latest_pos().unwrap_or(row.response.rect.center()),
                         });
                     }
-                    ui.add_space(2.0);
                     if expanded && !scenario.schedules.is_empty() {
-                        // The children on a faint accent wash, so they read as the scenario's.
+                        ui.add_space(2.0);
+                        // The children on a faint accent wash, so they read as the
+                        // scenario's; the same room above and below them.
                         egui::Frame::new()
                             .fill(schedule_rows_fill(ui.visuals()))
                             .corner_radius(egui::CornerRadius::same(crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS))
-                            .inner_margin(egui::Margin::symmetric(0, 2))
+                            .inner_margin(egui::Margin::symmetric(0, 3))
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
-                                draw_schedule_rows(ui, state, scenario, &mut actions, commands);
+                                draw_schedule_rows(ui, state, scenario, selection, &mut picked, commands);
                             });
                         ui.add_space(2.0);
                     }
@@ -253,51 +255,20 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
                 }
             });
             menu::menu_actions(ui, |ui| {
-                if ui.add(MenuButton::new(tr!("opt-add-scenario")).primary()).clicked() {
-                    actions.push(UiCommand::AddOptimizationScenario);
-                }
                 if ui.add(MenuButton::new(tr!("common-close"))).clicked() || menu::dialog_cancel_pressed(ui.ctx()) {
                     close = true;
                 }
-                // Import and export take the left of the same row.
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    let accent = menu::accent_fill(ui.visuals());
-                    let import = ToolbarButton::new(egui::Image::new(unthemed_icon!("load_scenarios.svg")).tint(accent), tr!("opt-import-json"))
-                        .id_salt("opt_import")
-                        .button_side(ICON_SIDE);
-                    if ui.add(import).clicked() {
-                        actions.push(UiCommand::ImportOptimizationScenarios);
-                    }
-                    let export = ToolbarButton::new(egui::Image::new(unthemed_icon!("export_scenarios.svg")).tint(accent), tr!("opt-export-json"))
-                        .id_salt("opt_export")
-                        .button_side(ICON_SIDE);
-                    if ui.add_enabled_ui(!state.scenarios.is_empty(), |ui| ui.add(export)).inner.clicked() {
-                        actions.push(UiCommand::ExportOptimizationScenarios);
-                    }
-                });
             });
         });
     // A button clicked while a name is still being typed commits the name
     // first: its field may not have lost focus yet this frame.
-    if !actions.is_empty() || run.is_some() || close || !open {
+    if !actions.is_empty() || close || !open {
         commit_typed_names(ui.ctx(), state, commands);
     }
     commands.extend(actions);
+    state.list_selection = picked;
     if let Some(id) = show_results {
         state.results_view = Some(crate::ui::state::ResultsView::new(crate::ui::state::ResultsSource::Run(id)));
-    }
-    if let Some(id) = run {
-        let busy = state
-            .scenarios
-            .iter()
-            .find(|scenario| scenario.id == id)
-            .is_some_and(|scenario| matches!(state.status(scenario), ScenarioStatus::Running(_) | ScenarioStatus::Queued));
-        commands.push(if busy {
-            UiCommand::CancelOptimizationScenario(id)
-        } else {
-            UiCommand::RunOptimizationScenario(id)
-        });
     }
     if close || !open {
         state.list_open = false;
@@ -305,6 +276,197 @@ fn draw_scenarios_list(ui: &mut egui::Ui, state: &mut OptimizationState, block_m
     } else {
         draw_drop_menu(ui.ctx(), state, commands);
     }
+}
+
+/// The list's toolbar, acting on the picked row. A button that does not
+/// apply to the picked row is not shown at all:
+/// - Add scenario: always.
+/// - Add schedule: a scenario picked.
+/// - Edit, Duplicate, Delete, Run: any row picked.
+/// - Run all: a scenario picked (greyed while it has no schedules).
+/// - Results: any row picked (greyed until it has results).
+/// - Play the mining: a schedule picked (greyed until it can be played).
+/// - Import and export, on the right: always.
+fn draw_list_toolbar(ui: &mut egui::Ui, state: &OptimizationState, selection: Option<ListSelection>, actions: &mut Vec<UiCommand>, show_results: &mut Option<u64>) {
+    let scenario = selection.and_then(|selection| state.scenarios.iter().find(|scenario| scenario.id == selection.scenario()));
+    let schedule = match selection {
+        Some(ListSelection::Schedule { id, .. }) => scenario.and_then(|scenario| scenario.schedules.iter().find(|schedule| schedule.id == id)),
+        _ => None,
+    };
+    let scenario_picked = matches!(selection, Some(ListSelection::Scenario(_)));
+    let accent = menu::accent_fill(ui.visuals());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let button = |ui: &mut egui::Ui, image: egui::Image<'static>, tooltip: String, salt: &str, enabled: bool| -> bool {
+            ui.add_enabled_ui(enabled, |ui| {
+                ui.add(ToolbarButton::new(image, tooltip).id_salt(("opt_list_toolbar", salt)).button_side(ICON_SIDE))
+            })
+            .inner
+            .clicked()
+        };
+        if button(ui, egui::Image::new(themed_icon!(ui, "grid_add.svg")), tr!("opt-add-scenario"), "add", true) {
+            actions.push(UiCommand::AddOptimizationScenario);
+        }
+        // In the schedules' colour (see `schedule_rows_fill`).
+        if scenario_picked && let Some(scenario) = scenario {
+            let add_icon = egui::Image::new(egui::include_image!("../../../res/ui/icons_dark/schedule_add.svg")).tint(accent);
+            if button(ui, add_icon, tr!("sched-add"), "add_schedule", true) {
+                actions.push(UiCommand::AddSchedule(scenario.id));
+            }
+        }
+        if let Some(selection) = selection {
+            ui.separator();
+            if button(ui, egui::Image::new(themed_icon!(ui, "edit.svg")), tr!("opt-list-edit"), "edit", true) {
+                actions.push(match selection {
+                    ListSelection::Scenario(id) => UiCommand::EditOptimizationScenario(id),
+                    ListSelection::Schedule { parent, id } => UiCommand::EditSchedule { parent, id },
+                });
+            }
+            if button(ui, egui::Image::new(themed_icon!(ui, "duplicate.svg")), tr!("opt-list-duplicate"), "duplicate", true) {
+                actions.push(match selection {
+                    ListSelection::Scenario(id) => UiCommand::DuplicateOptimizationScenario(id),
+                    ListSelection::Schedule { parent, id } => UiCommand::DuplicateSchedule { parent, id },
+                });
+            }
+            if button(ui, egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("opt-list-delete"), "delete", true) {
+                actions.push(match selection {
+                    ListSelection::Scenario(id) => UiCommand::DeleteOptimizationScenario(id),
+                    ListSelection::Schedule { parent, id } => UiCommand::DeleteSchedule { parent, id },
+                });
+            }
+            ui.separator();
+            // Run, or stop a run going: the scenario's, or the schedule's (which
+            // runs its scenario first when that has no up-to-date run).
+            let status = match (scenario, schedule) {
+                (Some(scenario), Some(schedule)) => schedule_play_status(state.schedule_status(scenario, schedule)),
+                (Some(scenario), None) => state.status(scenario),
+                _ => ScenarioStatus::NeverRun,
+            };
+            let play = play_button(ui, status);
+            let play = match (scenario, schedule) {
+                (Some(scenario), Some(schedule)) if state.schedule_status(scenario, schedule) == ScheduleStatus::Blocked => play.on_hover_text(tr!("sched-run-parent-first-hint")),
+                _ => play,
+            };
+            if play.clicked() {
+                match (selection, status) {
+                    (ListSelection::Scenario(id), ScenarioStatus::Running(_) | ScenarioStatus::Queued) => actions.push(UiCommand::CancelOptimizationScenario(id)),
+                    (ListSelection::Scenario(id), _) => actions.push(UiCommand::RunOptimizationScenario(id)),
+                    (ListSelection::Schedule { parent, id }, _) => actions.push(UiCommand::RunSchedule { parent, id }),
+                }
+            }
+            // Every schedule of the picked scenario, side by side.
+            if scenario_picked && let Some(scenario) = scenario {
+                let has_schedules = !scenario.schedules.is_empty();
+                let tooltip = if has_schedules { tr!("sched-run-all-button") } else { tr!("sched-run-all-none") };
+                let response = ui
+                    .add_enabled_ui(has_schedules, |ui| {
+                        ui.add(
+                            ToolbarButton::new(egui::Image::new(unthemed_icon!("run_all.svg")), tooltip.clone())
+                                .id_salt(("opt_list_toolbar", "run_all"))
+                                .button_side(ICON_SIDE),
+                        )
+                    })
+                    .inner;
+                if !has_schedules {
+                    let _ = response.clone().on_disabled_hover_text(tooltip);
+                }
+                if response.clicked() {
+                    actions.push(UiCommand::RunAllSchedules(scenario.id));
+                }
+            }
+            let has_results = match (scenario, schedule) {
+                (Some(scenario), Some(schedule)) => state.schedule_status(scenario, schedule) == ScheduleStatus::UpToDate && state.schedule_results.contains_key(&schedule.id),
+                (Some(scenario), None) => state.results.contains_key(&scenario.id),
+                _ => false,
+            };
+            let results = egui::Image::new(unthemed_icon!("results_scenario.svg")).tint(accent);
+            if button(ui, results, tr!("opt-list-results"), "results", has_results) {
+                match selection {
+                    ListSelection::Scenario(id) => *show_results = Some(id),
+                    ListSelection::Schedule { parent, id } => actions.push(UiCommand::OpenScheduleResults { parent, id }),
+                }
+            }
+            if let (Some(scenario), Some(schedule), ListSelection::Schedule { parent, id }) = (scenario, schedule, selection) {
+                let playable =
+                    state.schedule_status(scenario, schedule) == ScheduleStatus::UpToDate && state.schedule_results.get(&schedule.id).is_some_and(|result| result.order.is_some());
+                if button(
+                    ui,
+                    egui::Image::new(themed_icon!(ui, "schedule_animate.svg")),
+                    tr!("sched-anim-button"),
+                    "animate",
+                    playable,
+                ) {
+                    actions.push(UiCommand::PlayScheduleAnimation { parent, id });
+                }
+            }
+        }
+        // Import and export on the right.
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let export = egui::Image::new(unthemed_icon!("export_scenarios.svg")).tint(accent);
+            if button(ui, export, tr!("opt-export-json"), "export", !state.scenarios.is_empty()) {
+                actions.push(UiCommand::ExportOptimizationScenarios);
+            }
+            let import = egui::Image::new(unthemed_icon!("load_scenarios.svg")).tint(accent);
+            if button(ui, import, tr!("opt-import-json"), "import", true) {
+                actions.push(UiCommand::ImportOptimizationScenarios);
+            }
+        });
+    });
+}
+
+/// Pick a row by clicking anywhere on it (its name field still takes the
+/// click to edit), and tint the picked one behind its contents.
+fn select_row(ui: &egui::Ui, background: egui::layers::ShapeIdx, rect: egui::Rect, selected: bool, this: ListSelection, picked: &mut Option<ListSelection>) {
+    if ui.rect_contains_pointer(rect) && ui.input(|input| input.pointer.primary_clicked()) {
+        *picked = Some(this);
+    }
+    if selected {
+        // A clear accent: the selection fill, an accent outline, and a bar at the left.
+        let area = rect.expand2(egui::vec2(2.0, 1.0));
+        let accent = menu::accent_fill(ui.visuals());
+        let radius = crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS;
+        let bar = egui::Rect::from_min_size(area.min, egui::vec2(3.0, area.height()));
+        ui.painter().set(
+            background,
+            egui::Shape::Vec(vec![
+                egui::Shape::rect_filled(area, radius, ui.visuals().selection.bg_fill.gamma_multiply(0.7)),
+                egui::Shape::rect_stroke(area, radius, egui::Stroke::new(1.0, accent), egui::StrokeKind::Inside),
+                egui::Shape::rect_filled(bar, radius, accent),
+            ]),
+        );
+    }
+}
+
+/// A row's state: its icon, or while running (or queued) a progress ring.
+fn status_cell(ui: &mut egui::Ui, status: ScenarioStatus) {
+    match status {
+        ScenarioStatus::Running(progress) => progress_ring(ui, progress, tr!("opt-status-running-percent", percent = ((progress * 100.0) as u32).to_string())),
+        ScenarioStatus::Queued => progress_ring(ui, 0.0, tr!("opt-status-queued")),
+        _ => status_icon(ui, status),
+    }
+}
+
+/// A ring filling as `progress` goes from 0 to 1, as the play button shows it.
+fn progress_ring(ui: &mut egui::Ui, progress: f32, tooltip: String) {
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(ICON_SIDE), egui::Sense::hover());
+    paint_progress(ui, rect, progress);
+    response.on_hover_text(tooltip);
+}
+
+fn paint_progress(ui: &egui::Ui, rect: egui::Rect, progress: f32) {
+    let center = rect.center();
+    let radius = rect.width() / 2.0 - 1.5;
+    ui.painter()
+        .circle_stroke(center, radius, egui::Stroke::new(2.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+    let steps = ((progress * 64.0).ceil() as usize).max(2);
+    let points: Vec<egui::Pos2> = (0..=steps)
+        .map(|step| {
+            let angle = -std::f32::consts::FRAC_PI_2 + progress * std::f32::consts::TAU * step as f32 / steps as f32;
+            center + radius * egui::vec2(angle.cos(), angle.sin())
+        })
+        .collect();
+    ui.painter()
+        .add(egui::Shape::line(points, egui::Stroke::new(2.5, egui::Color32::from_rgb(0x2f, 0xb3, 0x44))));
 }
 
 // ── Schedules in the list ──
@@ -353,17 +515,30 @@ fn schedule_rows_fill(visuals: &egui::Visuals) -> egui::Color32 {
 }
 
 /// A scenario's schedules, one row each under it: a drag grip on the guide
-/// line, the name, the NPV, then the scenario row's icons in the same order.
-fn draw_schedule_rows(ui: &mut egui::Ui, state: &OptimizationState, scenario: &OptimizationScenario, actions: &mut Vec<UiCommand>, commands: &mut Vec<UiCommand>) {
+/// line, the name, the NPV, then its state on the right. Picked like a
+/// scenario row; the list's toolbar acts on it.
+fn draw_schedule_rows(
+    ui: &mut egui::Ui,
+    state: &OptimizationState,
+    scenario: &OptimizationScenario,
+    selection: Option<ListSelection>,
+    picked: &mut Option<ListSelection>,
+    commands: &mut Vec<UiCommand>,
+) {
     let parent = scenario.id;
     // The highest NPV among the scenario's schedules is shown in the accent.
     let summaries: Vec<Option<ScheduleSummary>> = scenario.schedules.iter().map(|schedule| state.schedule_summary(scenario, schedule)).collect();
     let top = summaries.iter().flatten().map(|summary| summary.npv_lead).fold(f64::NEG_INFINITY, f64::max);
     let names: Vec<String> = scenario.schedules.iter().map(|schedule| schedule.name.trim().to_lowercase()).collect();
     for (index, schedule) in scenario.schedules.iter().enumerate() {
+        // Room between rows only, so the group has the same margin above and below.
+        if index > 0 {
+            ui.add_space(2.0);
+        }
         let status = state.schedule_status(scenario, schedule);
         let issues = schedule.issues(scenario);
-        ui.horizontal(|ui| {
+        let background = ui.painter().add(egui::Shape::Noop);
+        let row = ui.horizontal(|ui| {
             ui.add_space(DISCLOSURE_WIDTH);
             // The grip: drag it onto another scenario to move or copy the schedule.
             let (grip, response) = ui.allocate_exact_size(egui::vec2(ICON_SIDE - 6.0, ICON_SIDE), egui::Sense::drag());
@@ -389,39 +564,6 @@ fn draw_schedule_rows(ui: &mut egui::Ui, state: &OptimizationState, scenario: &O
             response.on_hover_text(tr!("sched-drag-hint"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                // Without an up-to-date run of the scenario, Run runs it first.
-                let play = play_button(ui, schedule_play_status(status));
-                let play = if status == ScheduleStatus::Blocked {
-                    play.on_hover_text(tr!("sched-run-parent-first-hint"))
-                } else {
-                    play
-                };
-                if play.clicked() {
-                    actions.push(UiCommand::RunSchedule { parent, id: schedule.id });
-                }
-                // The mining played on the block model, from the last run.
-                let playable = status == ScheduleStatus::UpToDate && state.schedule_results.get(&schedule.id).is_some_and(|result| result.order.is_some());
-                let animate = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "schedule_animate.svg")), tr!("sched-anim-button"))
-                    .id_salt(("sched_animate", schedule.id))
-                    .button_side(ICON_SIDE);
-                let animate = ui.add_enabled_ui(playable, |ui| ui.add(animate)).inner;
-                if !playable {
-                    animate.clone().on_disabled_hover_text(tr!("sched-anim-needs-run"));
-                }
-                if animate.clicked() {
-                    actions.push(UiCommand::PlayScheduleAnimation { parent, id: schedule.id });
-                }
-                // The schedule's results, from its last run.
-                let has_results = status == ScheduleStatus::UpToDate && state.schedule_results.contains_key(&schedule.id);
-                let results = ToolbarButton::new(
-                    egui::Image::new(unthemed_icon!("results_scenario.svg")).tint(menu::accent_fill(ui.visuals())),
-                    if has_results { tr!("sched-res-button") } else { tr!("opt-results-not-run") },
-                )
-                .id_salt(("sched_results", schedule.id))
-                .button_side(ICON_SIDE);
-                if ui.add_enabled_ui(has_results, |ui| ui.add(results)).inner.clicked() {
-                    actions.push(UiCommand::OpenScheduleResults { parent, id: schedule.id });
-                }
                 schedule_status_icon(ui, status);
                 if !issues.is_empty() {
                     let image = egui::Image::new(unthemed_icon!("status_broken.svg")).fit_to_exact_size(egui::Vec2::splat(ICON_SIDE - 8.0));
@@ -429,34 +571,22 @@ fn draw_schedule_rows(ui: &mut egui::Ui, state: &OptimizationState, scenario: &O
                     ui.add_sized([ICON_SIDE, ICON_SIDE], image)
                         .on_hover_text(format!("{}\n{}", tr!("sched-issues-title"), lines.join("\n")));
                 }
-                let delete = ToolbarButton::new(egui::Image::new(unthemed_icon!("delete_scenario.svg")), tr!("sched-delete"))
-                    .id_salt(("sched_delete", schedule.id))
-                    .button_side(ICON_SIDE);
-                if ui.add(delete).clicked() {
-                    actions.push(UiCommand::DeleteSchedule { parent, id: schedule.id });
-                }
-                let duplicate = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "duplicate.svg")), tr!("sched-duplicate"))
-                    .id_salt(("sched_duplicate", schedule.id))
-                    .button_side(ICON_SIDE);
-                if ui.add(duplicate).clicked() {
-                    actions.push(UiCommand::DuplicateSchedule { parent, id: schedule.id });
-                }
-                let edit = ToolbarButton::new(egui::Image::new(themed_icon!(ui, "edit.svg")), tr!("sched-edit"))
-                    .id_salt(("sched_edit", schedule.id))
-                    .button_side(ICON_SIDE);
-                if ui.add(edit).clicked() {
-                    actions.push(UiCommand::EditSchedule { parent, id: schedule.id });
-                }
                 npv_cell(ui, summaries[index], summaries[index].is_some_and(|summary| summary.npv_lead >= top));
                 let duplicate_name = names.iter().enumerate().any(|(other, name)| other != index && *name == names[index]);
-                let name = draw_name_field(ui, schedule.id, &schedule.name, commands, move |id, name| UiCommand::RenameSchedule { parent, id, name });
+                let picked_row = selection == Some(ListSelection::Schedule { parent, id: schedule.id });
+                let name = draw_name_field(ui, schedule.id, &schedule.name, picked_row, commands, move |id, name| UiCommand::RenameSchedule {
+                    parent,
+                    id,
+                    name,
+                });
                 if duplicate_name {
                     mark_invalid(ui, &name);
                     name.on_hover_text(tr!("sched-name-taken"));
                 }
             });
         });
-        ui.add_space(2.0);
+        let this = ListSelection::Schedule { parent, id: schedule.id };
+        select_row(ui, background, row.response.rect, selection == Some(this), this, picked);
     }
 }
 
@@ -606,25 +736,65 @@ fn commit_typed_names(ctx: &egui::Context, state: &OptimizationState, commands: 
     }
 }
 
-/// The scenario's name, typed in place; the rename is sent when focus leaves,
-/// or when any button of the list is clicked ([`commit_typed_names`]).
-fn draw_name_field(ui: &mut egui::Ui, id: u64, name: &str, commands: &mut Vec<UiCommand>, rename: impl Fn(u64, String) -> UiCommand) -> egui::Response {
+/// A row's name: a framed label (the frame hints it can be edited), and on a
+/// double click a box to rename it in. The rename is sent when the box is
+/// left or Enter is pressed, or when any button of the list is clicked
+/// ([`commit_typed_names`]); Escape drops it. A single click picks the row
+/// (see [`select_row`]).
+fn draw_name_field(ui: &mut egui::Ui, id: u64, name: &str, selected: bool, commands: &mut Vec<UiCommand>, rename: impl Fn(u64, String) -> UiCommand) -> egui::Response {
     let (field_id, buffer_id) = name_field_ids(id);
+    let editing_id = field_id.with("editing");
+    // 1: just double-clicked (focus asked for); 2: being typed in.
+    let editing = ui.data(|data| data.get_temp::<u8>(editing_id)).unwrap_or(0);
+    if editing == 0 {
+        let height = ui.spacing().interact_size.y;
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::click());
+        let visuals = ui.visuals();
+        let stroke = if response.hovered() {
+            visuals.widgets.hovered.bg_stroke
+        } else {
+            visuals.widgets.noninteractive.bg_stroke
+        };
+        ui.painter()
+            .rect_stroke(rect, crate::ui::widgets::toolbar::GROUP_CORNER_RADIUS, stroke, egui::StrokeKind::Inside);
+        // The picked row's name in the strong text colour, over its accent.
+        let color = if selected { visuals.strong_text_color() } else { visuals.text_color() };
+        let galley = ui.painter().layout(name.to_owned(), egui::TextStyle::Body.resolve(ui.style()), color, rect.width() - 10.0);
+        ui.painter_at(rect.shrink(1.0))
+            .galley(egui::pos2(rect.left() + 5.0, rect.center().y - galley.size().y / 2.0), galley, color);
+        if response.double_clicked() {
+            ui.data_mut(|data| data.insert_temp(editing_id, 1u8));
+            ui.memory_mut(|memory| memory.request_focus(field_id));
+        }
+        return response.on_hover_cursor(egui::CursorIcon::Default).on_hover_text(tr!("opt-rename-hint"));
+    }
 
-    // What was typed is kept until the field is left, whatever the focus
-    // state says on the frame it is lost.
+    // What was typed is kept until the box is left, whatever the focus state
+    // says on the frame it is lost.
     let pending = ui.data_mut(|data| data.get_temp::<String>(buffer_id));
     let mut text = pending.clone().unwrap_or_else(|| name.to_owned());
     let response = ui.add(egui::TextEdit::singleline(&mut text).id(field_id).desired_width(ui.available_width()));
     if response.changed() {
         ui.data_mut(|data| data.insert_temp(buffer_id, text.clone()));
     }
-    if pending.is_some() && !response.has_focus() {
+    if editing == 1 {
+        response.request_focus();
+        ui.data_mut(|data| data.insert_temp(editing_id, 2u8));
+        return response;
+    }
+    let cancelled = ui.input(|input| input.key_pressed(egui::Key::Escape));
+    if !response.has_focus() || cancelled {
         let typed = text.trim();
-        if !typed.is_empty() && typed != name {
+        if pending.is_some() && !cancelled && !typed.is_empty() && typed != name {
             commands.push(rename(id, typed.to_owned()));
         }
-        ui.data_mut(|data| data.remove::<String>(buffer_id));
+        ui.data_mut(|data| {
+            data.remove::<String>(buffer_id);
+            data.remove::<u8>(editing_id);
+        });
+        if cancelled {
+            ui.memory_mut(|memory| memory.surrender_focus(field_id));
+        }
     }
     response
 }
@@ -655,19 +825,7 @@ fn play_button(ui: &mut egui::Ui, status: ScenarioStatus) -> egui::Response {
     }
     egui::Image::new(unthemed_icon!("run_scenario.svg")).paint_at(ui, rect.shrink(6.0));
     if let Some(progress) = running {
-        let center = rect.center();
-        let radius = rect.width() / 2.0 - 1.5;
-        ui.painter()
-            .circle_stroke(center, radius, egui::Stroke::new(2.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
-        let steps = ((progress * 64.0).ceil() as usize).max(2);
-        let points: Vec<egui::Pos2> = (0..=steps)
-            .map(|step| {
-                let angle = -std::f32::consts::FRAC_PI_2 + progress * std::f32::consts::TAU * step as f32 / steps as f32;
-                center + radius * egui::vec2(angle.cos(), angle.sin())
-            })
-            .collect();
-        ui.painter()
-            .add(egui::Shape::line(points, egui::Stroke::new(2.5, egui::Color32::from_rgb(0x2f, 0xb3, 0x44))));
+        paint_progress(ui, rect, progress);
     }
     let tooltip = match running {
         Some(_) if status == ScenarioStatus::Queued => format!("{}\n{}", tr!("opt-status-queued"), tr!("opt-cancel-run")),

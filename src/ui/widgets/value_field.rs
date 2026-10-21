@@ -93,11 +93,22 @@ pub(crate) trait FieldEditor: ValueKind {
     /// [`Self::edit`], with a unit after the value while it is not being
     /// typed in, as `egui::DragValue::suffix` shows one. Only numbers have one.
     fn edit_with_suffix(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str) -> egui::Response;
+
+    /// [`Self::edit_with_suffix`], keeping `inset` points free at the box's
+    /// left inside its frame (for a switch drawn there). Only numbers keep it.
+    fn edit_inset(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str, inset: f32) -> egui::Response {
+        let _ = inset;
+        self.edit_with_suffix(ui, id, width, range, suffix)
+    }
 }
 
 impl FieldEditor for f64 {
     fn edit_with_suffix(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str) -> egui::Response {
-        let (mut response, parsed) = edit_number(ui, id, self.to_string(), width, range, suffix);
+        self.edit_inset(ui, id, width, range, suffix, 0.0)
+    }
+
+    fn edit_inset(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str, inset: f32) -> egui::Response {
+        let (mut response, parsed) = edit_number(ui, id, self.to_string(), width, range, suffix, inset);
         if let Some(parsed) = parsed {
             *self = parsed;
             response.mark_changed();
@@ -108,7 +119,11 @@ impl FieldEditor for f64 {
 
 impl FieldEditor for f32 {
     fn edit_with_suffix(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str) -> egui::Response {
-        let (mut response, parsed) = edit_number(ui, id, self.to_string(), width, range, suffix);
+        self.edit_inset(ui, id, width, range, suffix, 0.0)
+    }
+
+    fn edit_inset(&mut self, ui: &mut egui::Ui, id: egui::Id, width: f32, range: (f64, f64), suffix: &str, inset: f32) -> egui::Response {
+        let (mut response, parsed) = edit_number(ui, id, self.to_string(), width, range, suffix, inset);
         if let Some(parsed) = parsed {
             *self = parsed as f32;
             response.mark_changed();
@@ -132,7 +147,7 @@ impl FieldEditor for bool {
 
 /// A text box for a whole number of at least `range.0`, that takes digits only.
 pub(crate) fn edit_count(ui: &mut egui::Ui, id: egui::Id, value: &mut u32, width: f32, range: (u32, u32)) -> egui::Response {
-    let (mut response, parsed) = edit_number(ui, id, value.to_string(), width, (f64::from(range.0), f64::from(range.1)), "");
+    let (mut response, parsed) = edit_number(ui, id, value.to_string(), width, (f64::from(range.0), f64::from(range.1)), "", 0.0);
     if let Some(parsed) = parsed.filter(|parsed| parsed.fract() == 0.0) {
         *value = parsed as u32;
         response.mark_changed();
@@ -165,7 +180,7 @@ pub(crate) fn filter_number(text: &str, allow_negative: bool) -> String {
 /// half-written number ("-", "1.") does not fight the value; the value follows
 /// as soon as the text parses, and is clamped into `range` when focus leaves.
 /// At rest the box shows `suffix` after the number; typing drops it.
-fn edit_number(ui: &mut egui::Ui, id: egui::Id, shown: String, width: f32, range: (f64, f64), suffix: &str) -> (egui::Response, Option<f64>) {
+fn edit_number(ui: &mut egui::Ui, id: egui::Id, shown: String, width: f32, range: (f64, f64), suffix: &str, inset: f32) -> (egui::Response, Option<f64>) {
     let buffer_id = id.with("typed");
     let focused = ui.memory(|memory| memory.has_focus(id));
     let mut text = if focused {
@@ -176,7 +191,11 @@ fn edit_number(ui: &mut egui::Ui, id: egui::Id, shown: String, width: f32, range
         ui.data_mut(|data| data.remove::<String>(buffer_id));
         format!("{shown}{suffix}")
     };
-    let response = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width).horizontal_align(egui::Align::RIGHT));
+    let mut edit = egui::TextEdit::singleline(&mut text).id(id).desired_width(width).horizontal_align(egui::Align::RIGHT);
+    if inset > 0.0 {
+        edit = edit.margin(inset_margin(inset));
+    }
+    let response = ui.add(edit);
     // A box at rest holds its suffix, which is not something typed in.
     let typing = response.has_focus() || response.changed();
     let filtered = filter_number(&text, range.0 < 0.0);
@@ -205,6 +224,22 @@ pub(crate) struct ValueField<'a, T: FieldEditor> {
     value: &'a mut FieldValue<T>,
     range: (f64, f64),
     suffix: String,
+    /// A switch inside the box at its left: off greys the field out.
+    switch: Option<&'a mut bool>,
+}
+
+/// Width of the switch inside a field's box, and its gap from the box's edge.
+const INNER_SWITCH: egui::Vec2 = egui::vec2(28.0, 14.0);
+const INNER_SWITCH_GAP: f32 = 4.0;
+
+/// A box's text margin with `inset` points kept free at the left.
+fn inset_margin(inset: f32) -> egui::Margin {
+    egui::Margin {
+        left: inset.round().clamp(0.0, 127.0) as i8,
+        right: 4,
+        top: 2,
+        bottom: 2,
+    }
 }
 
 impl<'a, T: FieldEditor> ValueField<'a, T> {
@@ -214,7 +249,16 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
             value,
             range: (f64::MIN, f64::MAX),
             suffix: String::new(),
+            switch: None,
         }
+    }
+
+    /// A switch inside the box, pressed against its left edge: on, the field
+    /// takes a value; off, it is greyed (its value kept) - an optional limit,
+    /// say. The field's label names what is switched, so the switch has none.
+    pub(crate) fn switch(mut self, on: &'a mut bool) -> Self {
+        self.switch = Some(on);
+        self
     }
 
     /// The unit shown after a typed number, as `egui::DragValue::suffix`
@@ -240,7 +284,9 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
     }
 
     fn control(self, ui: &mut egui::Ui, width: f32) -> egui::Response {
-        let Self { id, value, range, suffix } = self;
+        let Self { id, value, range, suffix, switch } = self;
+        let enabled = switch.as_deref().copied().unwrap_or(true);
+        let inset = if switch.is_some() { INNER_SWITCH.x + 2.0 * INNER_SWITCH_GAP } else { 0.0 };
         let ctx = ui.ctx().clone();
         let mut chosen = false;
         if let Some(name) = take_choice(&ctx, id) {
@@ -252,46 +298,69 @@ impl<'a, T: FieldEditor> ValueField<'a, T> {
         let mut cleared = false;
         let mut requested = false;
         let mut response = ui
-            .horizontal(|ui| {
-                let response = match &value.constant {
-                    Some(name) => {
-                        let found = constants.iter().find(|constant| constant.name == *name);
-                        let fitting = found.and_then(|constant| T::from_constant(&constant.value));
-                        let mut shown = name.clone();
-                        let response = ui.add_enabled(false, egui::TextEdit::singleline(&mut shown).desired_width(editor_width));
-                        let message = match (found, fitting) {
-                            (None, _) => Some(tr!("opt-constant-missing", name = name.clone())),
-                            (Some(_), None) => Some(tr!("opt-constant-wrong-type", name = name.clone())),
-                            (Some(constant), Some(_)) => return_value_hint(&response, &constant.value),
-                        };
-                        finish_locked(response, message)
-                    }
-                    None => value.value.edit_with_suffix(ui, id, editor_width, range, &suffix),
-                };
-                if value.constant.is_some() {
-                    if ui
+            .add_enabled_ui(enabled, |ui| {
+                ui.horizontal(|ui| {
+                    let response = match &value.constant {
+                        Some(name) => {
+                            let found = constants.iter().find(|constant| constant.name == *name);
+                            let fitting = found.and_then(|constant| T::from_constant(&constant.value));
+                            let mut shown = name.clone();
+                            let mut locked = egui::TextEdit::singleline(&mut shown).desired_width(editor_width);
+                            if inset > 0.0 {
+                                locked = locked.margin(inset_margin(inset));
+                            }
+                            let response = ui.add_enabled(false, locked);
+                            let message = match (found, fitting) {
+                                (None, _) => Some(tr!("opt-constant-missing", name = name.clone())),
+                                (Some(_), None) => Some(tr!("opt-constant-wrong-type", name = name.clone())),
+                                (Some(constant), Some(_)) => return_value_hint(&response, &constant.value),
+                            };
+                            finish_locked(response, message)
+                        }
+                        None => value.value.edit_inset(ui, id, editor_width, range, &suffix, inset),
+                    };
+                    if value.constant.is_some() {
+                        if ui
+                            .add(
+                                ToolbarButton::new(egui::Image::new(themed_icon!(ui, "constant_clear.svg")), tr!("opt-clear-constant"))
+                                    .id_salt(id.with("clear"))
+                                    .button_side(BUTTON_SIDE),
+                            )
+                            .clicked()
+                        {
+                            cleared = true;
+                        }
+                    } else if ui
                         .add(
-                            ToolbarButton::new(egui::Image::new(themed_icon!(ui, "constant_clear.svg")), tr!("opt-clear-constant"))
-                                .id_salt(id.with("clear"))
+                            ToolbarButton::new(egui::Image::new(themed_icon!(ui, "constant_pick.svg")), tr!("opt-pick-constant"))
+                                .id_salt(id.with("pick"))
                                 .button_side(BUTTON_SIDE),
                         )
                         .clicked()
                     {
-                        cleared = true;
+                        requested = true;
                     }
-                } else if ui
-                    .add(
-                        ToolbarButton::new(egui::Image::new(themed_icon!(ui, "constant_pick.svg")), tr!("opt-pick-constant"))
-                            .id_salt(id.with("pick"))
-                            .button_side(BUTTON_SIDE),
-                    )
-                    .clicked()
-                {
-                    requested = true;
-                }
-                response
+                    response
+                })
+                .inner
             })
             .inner;
+        // The switch, in the box's left corner: on top of the box, and usable
+        // while the field is greyed.
+        if let Some(on) = switch {
+            let rect = egui::Rect::from_min_size(
+                egui::pos2(response.rect.left() + INNER_SWITCH_GAP, response.rect.center().y - INNER_SWITCH.y / 2.0),
+                INNER_SWITCH,
+            );
+            let switch = ui.put(rect, crate::ui::widgets::menu::SlidingToggle::new(on).size(INNER_SWITCH));
+            // The box under it asks for the text cursor; the switch is not text.
+            if switch.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+            }
+            if switch.changed() {
+                response.mark_changed();
+            }
+        }
         if cleared {
             value.constant = None;
         }

@@ -783,7 +783,14 @@ impl<'a> App<'a> {
             UiCommand::MoveSchedule { id, from, to } => self.move_schedule(id, from, to, false),
             UiCommand::CopyScheduleTo { id, from, to } => self.move_schedule(id, from, to, true),
             UiCommand::RunSchedule { parent, id } => {
+                // A run of its own writes its period field, even if Run all
+                // queued it before.
+                self.editor.optimization.no_period_field.remove(&id);
                 self.run_schedule(parent, id);
+                Ok(())
+            }
+            UiCommand::RunAllSchedules(parent) => {
+                self.run_all_schedules(parent);
                 Ok(())
             }
             UiCommand::PlayScheduleAnimation { parent, id } => {

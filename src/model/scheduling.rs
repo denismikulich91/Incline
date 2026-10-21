@@ -304,7 +304,7 @@ impl Schedule {
             period_field_mode: ShellFieldMode::New,
             period_field: String::new(),
             period_new_field: tr!("sched-default-period-field"),
-            create_reports: true,
+            create_reports: false,
         }
     }
 

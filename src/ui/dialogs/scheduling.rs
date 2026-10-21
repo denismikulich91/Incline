@@ -497,22 +497,19 @@ fn form_capacity(ui: &mut egui::Ui, id: &str, label: String, help: Option<String
 
 /// A capacity filling its grid cell: see [`capacity_controls`].
 fn cell_capacity(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, capacity: &mut Capacity, suffix: String) {
-    ui.horizontal(|ui| capacity_controls(ui, id, capacity, suffix));
+    capacity_controls(ui, id, capacity, suffix);
 }
 
-/// A "No limit" tick, then the amount. The amount stays (greyed) while there
-/// is no limit, so unticking gives it back; a limit of 0 is red, since it
-/// lets nothing through.
+/// The amount, with a switch inside its box at the left: on, the amount is the
+/// limit; off, there is none and the box is greyed. The amount stays while
+/// off, so switching back on gives it back; a limit of 0 is red, since it lets
+/// nothing through.
 fn capacity_controls(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, capacity: &mut Capacity, suffix: String) {
-    let mut unlimited = !capacity.limited;
-    if ui.checkbox(&mut unlimited, tr!("sched-no-limit")).changed() {
-        capacity.limited = !unlimited;
-    }
-    let limited = capacity.limited;
-    let response = ui
-        .add_enabled_ui(limited, |ui| ValueField::new(id, &mut capacity.amount).range(0.0, f64::MAX).suffix(suffix).show(ui))
-        .inner;
-    if limited && capacity.amount.constant.is_none() && capacity.amount.value == 0.0 {
+    let Capacity { limited, amount } = capacity;
+    let response = ValueField::new(id, amount).range(0.0, f64::MAX).suffix(suffix).switch(limited).show(ui);
+    if !capacity.limited {
+        let _ = response.on_disabled_hover_text(tr!("sched-no-limit-hint"));
+    } else if capacity.amount.constant.is_none() && capacity.amount.value == 0.0 {
         mark_invalid(ui, &response);
         response.on_hover_text(tr!("sched-zero-limit-hint"));
     }

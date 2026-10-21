@@ -3746,6 +3746,8 @@ pub(crate) enum UiCommand {
         parent: u64,
         id: u64,
     },
+    /// Run every schedule of this scenario, side by side.
+    RunAllSchedules(u64),
     /// Play a schedule's mining on its block model (the playback deck).
     PlayScheduleAnimation {
         parent: u64,
@@ -4046,6 +4048,7 @@ impl UiCommand {
             | Self::EditSchedule { .. }
             | Self::RenameSchedule { .. }
             | Self::RunSchedule { .. }
+            | Self::RunAllSchedules(_)
             | Self::PlayScheduleAnimation { .. }
             | Self::ApplyFieldAnimation
             | Self::OpenScheduleResults { .. }
@@ -4928,6 +4931,8 @@ pub(crate) struct OptimizationState {
     pub(crate) schedule_draft: Option<ScheduleDraft>,
     /// Scenarios whose schedules are listed under them.
     pub(crate) expanded: HashSet<u64>,
+    /// The row picked in the scenarios list: what its toolbar acts on.
+    pub(crate) list_selection: Option<ListSelection>,
     /// A schedule dropped on another scenario, asking Move or Duplicate.
     pub(crate) drop_menu: Option<ScheduleDrop>,
     /// Schedule runs by schedule id; a finished one keeps the schedule's and
@@ -4935,6 +4940,13 @@ pub(crate) struct OptimizationState {
     pub(crate) schedule_runs: HashMap<u64, RunState>,
     /// What each schedule's last run found, by schedule id.
     pub(crate) schedule_summaries: HashMap<u64, ScheduleSummary>,
+    /// What each scenario's last run read from its block model: when that
+    /// changes, the run is stale (`App::reconcile_optimization_runs`).
+    pub(crate) run_inputs: HashMap<u64, RunInputsKey>,
+    /// Schedules started by Run all: they write no period field (they would
+    /// all write the same one, last finisher winning); their mining order is
+    /// kept, so the animation still plays.
+    pub(crate) no_period_field: HashSet<u64>,
     /// Schedules waiting for their scenario's run, by scenario id: run
     /// asked for one whose scenario had no up-to-date run, so it runs first.
     pub(crate) schedules_after_run: HashMap<u64, Vec<u64>>,
@@ -4957,8 +4969,8 @@ pub(crate) enum LoadThen {
     Run(Vec<u64>),
     /// Pick the directional shells' starting point.
     Pick,
-    /// Run this schedule of scenario `parent`.
-    Schedule { parent: u64, id: u64 },
+    /// Run these schedules: (scenario, schedule).
+    Schedules(Vec<(u64, u64)>),
 }
 
 /// The Results window: a run's report, charted and tabled.
@@ -4972,6 +4984,32 @@ pub(crate) struct ResultsView {
     pub(crate) selected: Option<usize>,
     /// Showing only some shells, or choosing them.
     pub(crate) filter: ShellFilter,
+}
+
+/// What a scenario's run read from its block model: the model, each input
+/// column's values (where they were in memory when last checked, and a hash
+/// of all of them).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RunInputsKey {
+    pub(crate) model: crate::model::block_model::BlockModelId,
+    pub(crate) columns: Vec<(String, usize)>,
+    pub(crate) hash: u64,
+}
+
+/// A row of the scenarios list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ListSelection {
+    Scenario(u64),
+    Schedule { parent: u64, id: u64 },
+}
+
+impl ListSelection {
+    /// The scenario the row is, or is under.
+    pub(crate) fn scenario(self) -> u64 {
+        match self {
+            Self::Scenario(id) | Self::Schedule { parent: id, .. } => id,
+        }
+    }
 }
 
 /// The schedule Results window.

@@ -12,7 +12,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use super::optimization_results::{CASH_FLOW, CHART_HEIGHT, ICON_SIDE, ORE, TABLE_HEIGHT, WASTE_BARS, WIDTH, draw_choosing_bar};
+use super::optimization_results::{CASH_FLOW, ICON_SIDE, ORE, WASTE_BARS, chart_height, column_switches, draw_choosing_bar};
 use crate::{
     i18n::tr,
     model::{
@@ -63,7 +63,7 @@ const GAP_THRESHOLD: f64 = 3.0;
 
 const CASES: [PeriodCase; 3] = [PeriodCase::FixedLead, PeriodCase::Worst, PeriodCase::Best];
 
-pub(crate) fn draw_schedule_results_window(ui: &mut egui::Ui, state: &mut OptimizationState, commands: &mut Vec<UiCommand>) {
+pub(crate) fn draw_schedule_results_window(ui: &mut egui::Ui, state: &mut OptimizationState, canvas_rect: egui::Rect, commands: &mut Vec<UiCommand>) {
     let Some(mut view) = state.schedule_results_view.clone() else {
         return;
     };
@@ -80,16 +80,41 @@ pub(crate) fn draw_schedule_results_window(ui: &mut egui::Ui, state: &mut Optimi
     let mut open = true;
     let mut close = false;
     let mut columns_changed = false;
-    DragableMenu::new("schedule_results_dialog", title)
-        .open(&mut open)
-        .min_width(WIDTH)
-        .max_width(WIDTH)
-        .show(ui.ctx(), |ui| {
-            let Some(result) = result.as_deref() else {
-                menu_note(ui, tr!("sched-res-none"));
-                close |= ui.add(MenuButton::new(tr!("common-close"))).clicked();
-                return;
-            };
+    // The whole 3D canvas, for room to read the chart and the table.
+    DragableMenu::new("schedule_results_dialog", title).open(&mut open).cover(canvas_rect).show(ui.ctx(), |ui| {
+        // The notes and the buttons are pinned to the bottom; the controls,
+        // chart and table fill exactly what is left above them, whatever the
+        // canvas's size.
+        let notes = match (result.as_deref(), view.tab) {
+            (None, _) => vec![tr!("sched-res-none")],
+            (Some(result), ScheduleResultsTab::Periods) => period_notes(result, view.case),
+            (Some(result), ScheduleResultsTab::Pits) => pit_notes(result),
+        };
+        egui::Panel::bottom("sched_results_bottom")
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin { top: 6, ..egui::Margin::ZERO }))
+            .resizable(false)
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                for note in notes {
+                    menu_note(ui, note);
+                }
+                menu::menu_actions(ui, |ui| {
+                    let escape = view.picking.is_none() && menu::dialog_cancel_pressed(ui.ctx());
+                    if ui.add(MenuButton::new(tr!("common-close"))).clicked() || escape {
+                        close = true;
+                    }
+                    if ui.add(MenuButton::new(tr!("sched-res-export")).enabled(result.is_some())).clicked() {
+                        commands.push(UiCommand::ExportScheduleReport);
+                    }
+                    if ui.add(MenuButton::new(tr!("sched-res-open"))).clicked() {
+                        commands.push(UiCommand::OpenScheduleReport);
+                    }
+                });
+            });
+        let Some(result) = result.as_deref() else {
+            return;
+        };
+        egui::CentralPanel::no_frame().show(ui, |ui| {
             // The tab, the case, and on the right the table's columns (and, in
             // the pit view, picking pushbacks).
             let table = match view.tab {
@@ -202,19 +227,8 @@ pub(crate) fn draw_schedule_results_window(ui: &mut egui::Ui, state: &mut Optimi
                     }
                 }
             }
-            menu::menu_actions(ui, |ui| {
-                let escape = view.picking.is_none() && menu::dialog_cancel_pressed(ui.ctx());
-                if ui.add(MenuButton::new(tr!("common-close"))).clicked() || escape {
-                    close = true;
-                }
-                if ui.add(MenuButton::new(tr!("sched-res-export"))).clicked() {
-                    commands.push(UiCommand::ExportScheduleReport);
-                }
-                if ui.add(MenuButton::new(tr!("sched-res-open"))).clicked() {
-                    commands.push(UiCommand::OpenScheduleReport);
-                }
-            });
         });
+    });
     if columns_changed {
         commands.push(UiCommand::SaveScheduleColumns);
     }
@@ -244,6 +258,7 @@ fn destination_name(result: &ScheduleResult, destination: usize) -> String {
 
 /// The schedule's periods in `case`: its chart, its table and notes.
 fn draw_periods(ui: &mut egui::Ui, result: &ScheduleResult, case: PeriodCase, content: PeriodContent, catalogue: &[Column], shown: &[String]) {
+    let chart_height = chart_height(ui);
     let Some(pit) = result.schedule() else {
         menu_note(ui, tr!("sched-res-none"));
         return;
@@ -274,7 +289,7 @@ fn draw_periods(ui: &mut egui::Ui, result: &ScheduleResult, case: PeriodCase, co
         PeriodContent::Mining => "sched_res_periods_mining",
         PeriodContent::Processing => "sched_res_periods_processing",
     };
-    let mut chart = BarLineChart::new(&labels).height(CHART_HEIGHT).id_salt(salt);
+    let mut chart = BarLineChart::new(&labels).height(chart_height).id_salt(salt);
     match content {
         PeriodContent::Mining => {
             // Every stockpile's balance as one area, at the back.
@@ -374,19 +389,27 @@ fn draw_periods(ui: &mut egui::Ui, result: &ScheduleResult, case: PeriodCase, co
             })
             .collect()
     };
-    draw_table(ui, ("periods", result.name.as_str(), case_key(case)), &header, rows.len(), &cell);
-    menu_note(
-        ui,
-        tr!(
-            "sched-res-period-notes",
-            periods = periods.len().to_string(),
-            npv = format_money(schedule.npv),
-            abandoned = format_quantity(schedule.abandoned, 0)
-        ),
-    );
+    // The table takes all that is left.
+    draw_table(ui, ("periods", result.name.as_str(), case_key(case)), &header, rows.len(), &cell, f32::INFINITY);
+}
+
+/// The period view's notes, under the table: periods, NPV, what is left on
+/// the stockpiles, and whether every pushback was mined.
+fn period_notes(result: &ScheduleResult, case: PeriodCase) -> Vec<String> {
+    let Some(pit) = result.schedule() else {
+        return Vec::new();
+    };
+    let schedule = pit.case(case);
+    let mut notes = vec![tr!(
+        "sched-res-period-notes",
+        periods = schedule.periods.len().to_string(),
+        npv = format_money(schedule.npv),
+        abandoned = format_quantity(schedule.abandoned, 0)
+    )];
     if schedule.unfinished {
-        menu_note(ui, tr!("sched-res-unfinished"));
+        notes.push(tr!("sched-res-unfinished"));
     }
+    notes
 }
 
 fn period_hover(result: &ScheduleResult, period: &PeriodResult, number: usize, cumulative: f64) -> String {
@@ -430,6 +453,7 @@ fn period_hover(result: &ScheduleResult, period: &PeriodResult, number: usize, c
 /// Each pushback's pit: the chart (NPV per case on one axis over the pit's
 /// tonnes), the table and notes. Returns a clicked pushback (0-based).
 fn draw_pits(ui: &mut egui::Ui, result: &ScheduleResult, picking: Option<&[usize]>, all_cases: bool, catalogue: &[Column], shown: &[String]) -> Option<usize> {
+    let chart_height = chart_height(ui);
     let labels: Vec<String> = (0..result.pits.len()).map(|pit| pit_label(result, pit)).collect();
     let npv = |case: PeriodCase| -> Vec<f64> {
         result
@@ -473,7 +497,7 @@ fn draw_pits(ui: &mut egui::Ui, result: &ScheduleResult, picking: Option<&[usize
     let selected: Vec<usize> = picking.map(<[usize]>::to_vec).unwrap_or_default();
     let lead_name = tr!("sched-res-npv-case", case = PeriodCase::FixedLead.label());
     let mut chart = BarLineChart::new(&labels)
-        .height(CHART_HEIGHT)
+        .height(chart_height)
         .id_salt("sched_res_pits")
         .bars(BarSeries {
             name: tr!("opt-results-ore-tonnes"),
@@ -541,32 +565,35 @@ fn draw_pits(ui: &mut egui::Ui, result: &ScheduleResult, picking: Option<&[usize
             })
             .collect()
     };
-    draw_table(ui, ("pits", result.name.as_str(), ""), &header, rows.len(), &cell);
+    // The table takes all that is left.
+    draw_table(ui, ("pits", result.name.as_str(), ""), &header, rows.len(), &cell, f32::INFINITY);
+    clicked
+}
 
-    // The gap test and the bounds, at the schedule; then where the NPV peaks.
+/// The pit view's notes: the gap test and the bounds at the schedule, then
+/// where the NPV peaks.
+fn pit_notes(result: &ScheduleResult) -> Vec<String> {
+    let mut notes = Vec::new();
     if let Some(pit) = result.schedule() {
         let (best, worst, lead) = (pit.best.npv, pit.worst.npv, pit.lead.npv);
         if best.abs() > 0.0 {
             let gap = (best - worst) / best.abs() * 100.0;
             let percent = format!("{gap:.1}");
-            menu_note(
-                ui,
-                if gap < GAP_THRESHOLD {
-                    tr!("sched-res-gap-small", percent = percent)
-                } else {
-                    tr!("sched-res-gap", percent = percent)
-                },
-            );
+            notes.push(if gap < GAP_THRESHOLD {
+                tr!("sched-res-gap-small", percent = percent)
+            } else {
+                tr!("sched-res-gap", percent = percent)
+            });
         }
         let slack = 1e-6 * best.abs().max(worst.abs()).max(1.0);
         if lead < best.min(worst) - slack || lead > best.max(worst) + slack {
-            menu_note(ui, tr!("sched-res-outside-bounds"));
+            notes.push(tr!("sched-res-outside-bounds"));
         }
     }
-    if let Some(peak) = peak.filter(|&peak| peak + 1 < result.pits.len()) {
-        menu_note(ui, tr!("sched-res-peak", pushback = (peak + 1).to_string()));
+    if let Some(peak) = result.peak(PeriodCase::FixedLead).filter(|&peak| peak + 1 < result.pits.len()) {
+        notes.push(tr!("sched-res-peak", pushback = (peak + 1).to_string()));
     }
-    clicked
+    notes
 }
 
 /// A pushback's column label: `PB 2 · RAF 0.85`, with the share of the
@@ -919,19 +946,12 @@ fn column_chooser(ui: &mut egui::Ui, catalogue: &[Column], shown: &mut Vec<Strin
     let response = ui.add(cog);
     egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_min_width(240.0);
-        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-            for column in catalogue {
-                let mut on = shown.contains(&column.id);
-                if ui.add_enabled(!column.fixed, egui::Checkbox::new(&mut on, &column.header)).changed() {
-                    *shown = catalogue
-                        .iter()
-                        .filter(|other| if other.id == column.id { on } else { shown.contains(&other.id) })
-                        .map(|other| other.id.clone())
-                        .collect();
-                    changed = true;
-                }
-            }
-        });
+        let rows: Vec<(String, bool)> = catalogue.iter().map(|column| (column.header.clone(), column.fixed)).collect();
+        let mut on: Vec<bool> = catalogue.iter().map(|column| shown.contains(&column.id)).collect();
+        if column_switches(ui, &rows, &mut on) {
+            *shown = catalogue.iter().zip(&on).filter(|(_, on)| **on).map(|(column, _)| column.id.clone()).collect();
+            changed = true;
+        }
         context_menu_separator(ui);
         if ui.add(MenuButton::new(tr!("opt-results-columns-default"))).clicked() {
             *shown = shown_ids(catalogue, None);
@@ -941,7 +961,7 @@ fn column_chooser(ui: &mut egui::Ui, catalogue: &[Column], shown: &mut Vec<Strin
     changed
 }
 
-fn draw_table(ui: &mut egui::Ui, key: (&str, &str, &str), header: &[String], rows: usize, cell: &dyn Fn(usize, bool) -> Vec<String>) {
+fn draw_table(ui: &mut egui::Ui, key: (&str, &str, &str), header: &[String], rows: usize, cell: &dyn Fn(usize, bool) -> Vec<String>, height: f32) {
     let aligns: Vec<egui::Align> = header.iter().map(|_| egui::Align::Max).collect();
     let rounded = |row: usize| cell(row, false);
     let exact = |row: usize| cell(row, true);
@@ -954,6 +974,6 @@ fn draw_table(ui: &mut egui::Ui, key: (&str, &str, &str), header: &[String], row
         .aligns(&aligns)
         .copy_cells(&exact)
         .fingerprint(fingerprint)
-        .max_height(TABLE_HEIGHT)
+        .max_height(height)
         .show(ui);
 }

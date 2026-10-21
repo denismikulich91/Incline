@@ -32,7 +32,7 @@ use crate::{
         project::ProjectItemState,
         triangulation::{GeneratedTriangulation, TriangulationId},
     },
-    ui::state::{LoadPrompt, LoadThen, MAX_CONCURRENT_RUNS, ResultsSource, ResultsView, RunState, ScenarioDraft, ShellStartPick, TriSurfaceType},
+    ui::state::{LoadPrompt, LoadThen, MAX_CONCURRENT_RUNS, ResultsSource, ResultsView, RunInputsKey, RunState, ScenarioDraft, ShellStartPick, TriSurfaceType},
     userspace_error, userspace_log, userspace_warn,
 };
 
@@ -488,6 +488,7 @@ impl<'a> App<'a> {
     /// Drop the state of runs whose job is gone without applying (its block
     /// model closed, say), so they do not show as running for ever.
     pub(crate) fn reconcile_optimization_runs(&mut self) {
+        self.stale_runs_on_edited_inputs();
         let restoring = self.restore_pending();
         let lost: Vec<u64> = self
             .editor
@@ -523,6 +524,52 @@ impl<'a> App<'a> {
             self.editor.optimization.awaiting_restore.remove(&id);
         }
         self.start_queued_optimization_runs();
+    }
+
+    /// A finished run whose block model inputs were edited since is stale
+    /// (its schedules then wait for a rerun). Cheap each frame: the input
+    /// columns' addresses are compared, and only when one moved (an edit, or
+    /// the model read back in) are the values hashed again; the same values
+    /// read back keep the run up to date. Shell and period fields the runs
+    /// write are never inputs, so they do not count.
+    fn stale_runs_on_edited_inputs(&mut self) {
+        let state = &self.editor.optimization;
+        let checks: Vec<(u64, RunInputsKey)> = state
+            .run_inputs
+            .iter()
+            .filter(|(id, _)| matches!(state.runs.get(id), Some(RunState::Finished { .. })))
+            .map(|(id, key)| (*id, key.clone()))
+            .collect();
+        for (id, key) in checks {
+            let Some(scenario) = self.editor.optimization.scenarios.iter().find(|scenario| scenario.id == id).cloned() else {
+                self.editor.optimization.run_inputs.remove(&id);
+                continue;
+            };
+            let stale = match self.block_models.iter().find(|model| model.id == key.model) {
+                None => true,
+                Some(model) if !model.state.loaded => continue,
+                Some(model) => {
+                    let columns = input_columns(model, &scenario);
+                    let addresses = column_addresses(&columns);
+                    if addresses == key.columns {
+                        continue;
+                    }
+                    if columns_hash(&columns) == key.hash {
+                        if let Some(key) = self.editor.optimization.run_inputs.get_mut(&id) {
+                            key.columns = addresses;
+                        }
+                        continue;
+                    }
+                    true
+                }
+            };
+            if stale {
+                let state = &mut self.editor.optimization;
+                state.run_inputs.remove(&id);
+                state.runs.insert(id, RunState::Finished { fingerprint: 0 });
+                userspace_log!("{}", tr!("opt-run-inputs-changed", name = scenario.name.clone()));
+            }
+        }
     }
 
     fn fail_optimization_run(&mut self, id: u64, name: &str, issues: &[String]) {
@@ -585,6 +632,13 @@ impl<'a> App<'a> {
                     }
                 }
             }
+            (LoadThen::Schedules(runs), LoadThen::Schedules(more)) => {
+                for run in more {
+                    if !runs.contains(&run) {
+                        runs.push(run);
+                    }
+                }
+            }
             (current, then) => *current = then,
         }
     }
@@ -610,9 +664,11 @@ impl<'a> App<'a> {
                     state.awaiting_restore.insert(*id);
                 }
             }
-            LoadThen::Schedule { id, .. } => {
-                state.schedule_runs.insert(*id, RunState::Running { progress: Progress::new() });
-                state.awaiting_restore.insert(*id);
+            LoadThen::Schedules(runs) => {
+                for (_, id) in runs {
+                    state.schedule_runs.insert(*id, RunState::Running { progress: Progress::new() });
+                    state.awaiting_restore.insert(*id);
+                }
             }
             LoadThen::Pick => {}
         }
@@ -643,11 +699,13 @@ impl<'a> App<'a> {
                     }
                 }
             }
-            LoadThen::Schedule { parent, id } => {
-                let state = &mut self.editor.optimization;
-                if state.awaiting_restore.remove(&id) {
-                    state.schedule_runs.remove(&id);
-                    self.run_schedule(parent, id);
+            LoadThen::Schedules(runs) => {
+                for (parent, id) in runs {
+                    let state = &mut self.editor.optimization;
+                    if state.awaiting_restore.remove(&id) {
+                        state.schedule_runs.remove(&id);
+                        self.run_schedule(parent, id);
+                    }
                 }
             }
             LoadThen::Pick => self.begin_shell_start_pick(),
@@ -734,6 +792,10 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr!("opt-run-started", name = scenario.name.clone(), cells = cells.to_string()));
 
         let fingerprint = scenario.fingerprint();
+        // What the run reads, so an edit to it later makes the run stale.
+        if let Some(key) = self.block_models.iter().find(|model| model.id == model_id).map(|model| run_inputs_key(model, &scenario)) {
+            self.editor.optimization.run_inputs.insert(id, key);
+        }
         let started = web_time::Instant::now();
         let progress = self.spawn_job_sharing_progress(
             tr!("opt-run-label", name = scenario.name.clone()),
@@ -1056,6 +1118,43 @@ impl<'a> App<'a> {
         userspace_log!("{}", tr!("opt-results-opened", name = name.clone(), count = report.shells.len().to_string()));
         self.editor.optimization.results_view = Some(ResultsView::new(ResultsSource::File { name, report: Arc::new(report) }));
         Ok(())
+    }
+}
+
+/// The columns of `model` that `scenario` reads, by name, sorted.
+fn input_columns(model: &crate::model::block_model::OpenBlockModel, scenario: &OptimizationScenario) -> Vec<(String, Option<Arc<Vec<f64>>>)> {
+    let mut names: Vec<&str> = scenario.used_fields().into_iter().filter(|name| !name.is_empty()).collect();
+    names.sort_unstable();
+    names.into_iter().map(|name| (name.to_owned(), model.model.shared_numeric_values(name))).collect()
+}
+
+fn column_addresses(columns: &[(String, Option<Arc<Vec<f64>>>)]) -> Vec<(String, usize)> {
+    columns
+        .iter()
+        .map(|(name, values)| (name.clone(), values.as_ref().map_or(0, |values| Arc::as_ptr(values) as usize)))
+        .collect()
+}
+
+fn columns_hash(columns: &[(String, Option<Arc<Vec<f64>>>)]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for (name, values) in columns {
+        name.hash(&mut hasher);
+        if let Some(values) = values {
+            values.len().hash(&mut hasher);
+            for value in values.iter() {
+                value.to_bits().hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
+fn run_inputs_key(model: &crate::model::block_model::OpenBlockModel, scenario: &OptimizationScenario) -> RunInputsKey {
+    let columns = input_columns(model, scenario);
+    RunInputsKey {
+        model: model.id,
+        columns: column_addresses(&columns),
+        hash: columns_hash(&columns),
     }
 }
 

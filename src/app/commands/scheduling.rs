@@ -243,16 +243,39 @@ impl<'a> App<'a> {
         // The block model and topography are read back first, if the user agrees.
         let unloaded = self.unloaded_optimization_inputs(&scenario);
         if !unloaded.is_empty() {
-            self.ask_to_load_for_optimization(unloaded, LoadThen::Schedule { parent, id });
+            self.ask_to_load_for_optimization(unloaded, LoadThen::Schedules(vec![(parent, id)]));
             return;
         }
         self.launch_schedule_run(scenario, schedule);
+    }
+
+    /// Run every schedule of scenario `parent` that is not running or waiting
+    /// already, side by side (each its own job; a scenario without an
+    /// up-to-date run is run once first, and they follow it).
+    pub(crate) fn run_all_schedules(&mut self, parent: u64) {
+        let state = &self.editor.optimization;
+        let Some(scenario) = state.scenarios.iter().find(|scenario| scenario.id == parent) else {
+            return;
+        };
+        let idle: Vec<u64> = scenario
+            .schedules
+            .iter()
+            .filter(|schedule| !matches!(state.schedule_status(scenario, schedule), ScheduleStatus::Running(_) | ScheduleStatus::Queued))
+            .map(|schedule| schedule.id)
+            .collect();
+        userspace_log!("{}", tr!("sched-run-all", scenario = scenario.name.clone(), count = idle.len().to_string()));
+        // They would all write the same period field: none does.
+        self.editor.optimization.no_period_field.extend(idle.iter().copied());
+        for id in idle {
+            self.run_schedule(parent, id);
+        }
     }
 
     fn cancel_schedule_run(&mut self, id: u64, name: &str) {
         self.cancel_jobs(|key| *key == JobKey::ScheduleRun(id));
         let state = &mut self.editor.optimization;
         state.awaiting_restore.remove(&id);
+        state.no_period_field.remove(&id);
         let mut waited = false;
         for waiting in state.schedules_after_run.values_mut() {
             let before = waiting.len();
@@ -313,11 +336,16 @@ impl<'a> App<'a> {
             .find(|model| model.id == model_id)
             .map(BlockModelFields::of_open)
             .unwrap_or_default();
-        let period_field = match schedule.period_field_target(&scenario, &fields) {
-            Ok(field) => field,
-            Err(issue) => {
-                self.fail_schedule_run(id, &schedule.name, &[issue]);
-                return;
+        // Started by Run all: no period field, only the kept mining order.
+        let period_field = if self.editor.optimization.no_period_field.remove(&id) {
+            None
+        } else {
+            match schedule.period_field_target(&scenario, &fields) {
+                Ok(field) => field,
+                Err(issue) => {
+                    self.fail_schedule_run(id, &schedule.name, &[issue]);
+                    return;
+                }
             }
         };
         let input = ScheduleInput {

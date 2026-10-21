@@ -842,7 +842,7 @@ impl Default for OutputSettings {
             use_directional_shells: false,
             shell_direction: ShellDirection::North,
             shell_start: None,
-            create_reports: true,
+            create_reports: false,
             reports_folder: String::new(),
             shell_as_solid: true,
             shell_as_surface: false,
